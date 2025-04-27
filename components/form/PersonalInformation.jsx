@@ -54,7 +54,7 @@ const PersonalInformation = ({}) => {
           type="file"
           name="profileImage"
           accept="image/*"
-          className="profileInput"
+          className="profileInput file:bg-blue-500"
           onChange={handleProfilePicture}
           placeholder="Profile Picture"
         />
