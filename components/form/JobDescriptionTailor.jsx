@@ -52,29 +52,142 @@ const JobDescriptionTailor = () => {
   };
 
   const extractJson = (text) => {
-    const match = text.match(/```json\n([\s\S]*?)\n```/);
-    if (match && match[1]) {
+    console.log("Raw LLM response:", text.substring(0, 500) + "..."); // Log the beginning of the response
+    
+    // First try: Look for JSON code block in markdown format with ```json tag
+    const jsonBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/;
+    const jsonBlockMatch = text.match(jsonBlockRegex);
+    
+    if (jsonBlockMatch && jsonBlockMatch[1]) {
       try {
-        return JSON.parse(match[1]);
+        return JSON.parse(jsonBlockMatch[1]);
       } catch (parseError) {
-        console.error("Failed to parse extracted JSON:", parseError);
-        setError("LLM response contained invalid JSON.");
-        return null;
+        console.error("Failed to parse JSON from code block:", parseError);
+        // Store the JSON text for potential cleanup
+        const jsonText = jsonBlockMatch[1];
+        try {
+          // Try to clean up common JSON syntax issues
+          const cleanedJson = cleanupJsonString(jsonText);
+          return JSON.parse(cleanedJson);
+        } catch (cleanupError) {
+          console.error("Failed to parse JSON even after cleanup:", cleanupError);
+          // Continue to next method rather than failing immediately
+        }
       }
     }
-    setError("Could not find JSON block in the LLM response.");
+    
+    // Second try: Look for JSON anywhere in the response
+    try {
+      // Try to find JSON object patterns - anything between { and } including all nested content
+      const jsonPattern = /{[\s\S]*}/;
+      const jsonMatch = text.match(jsonPattern);
+      
+      if (jsonMatch) {
+        const jsonText = jsonMatch[0];
+        console.log("Attempting to parse JSON:", jsonText.substring(0, 200) + "...");
+        try {
+          return JSON.parse(jsonText);
+        } catch (parseError) {
+          console.error("JSON parse error:", parseError.message);
+          // Log problematic area
+          const errorPos = findErrorPosition(parseError.message);
+          if (errorPos) {
+            const startPos = Math.max(0, errorPos - 20);
+            const endPos = Math.min(jsonText.length, errorPos + 20);
+            console.error(`JSON error context: "${jsonText.substring(startPos, endPos)}"`);
+          }
+          
+          // Try to clean up and parse again
+          const cleanedJson = cleanupJsonString(jsonText);
+          return JSON.parse(cleanedJson);
+        }
+      }
+    } catch (parseError) {
+      console.error("Failed to parse JSON from pattern matching:", parseError);
+    }
+    
+    // Third try: Check if the entire response is valid JSON
+    try {
+      const trimmedText = text.trim();
+      if (trimmedText.startsWith('{') && trimmedText.endsWith('}')) {
+        try {
+          return JSON.parse(trimmedText);
+        } catch (parseError) {
+          // Try with cleanup
+          const cleanedJson = cleanupJsonString(trimmedText);
+          return JSON.parse(cleanedJson);
+        }
+      }
+    } catch (finalError) {
+      console.error("Failed to parse entire response as JSON:", finalError);
+    }
+    
+    setError("Could not extract valid JSON from the LLM response. The model may have returned malformed JSON.");
     return null;
+  };
+
+  // Helper function to find position mentioned in JSON parse error
+  const findErrorPosition = (errorMessage) => {
+    const posMatch = errorMessage.match(/position (\d+)/);
+    if (posMatch && posMatch[1]) {
+      return parseInt(posMatch[1], 10);
+    }
+    return null;
+  };
+
+  // Helper function to attempt cleaning up common JSON syntax issues
+  const cleanupJsonString = (jsonString) => {
+    let cleaned = jsonString;
+    
+    // Replace single quotes with double quotes (but not inside already quoted strings)
+    cleaned = cleaned.replace(/(\w+)'/g, '$1"');
+    cleaned = cleaned.replace(/'(\w+)/g, '"$1');
+    
+    // Fix trailing commas in arrays and objects
+    cleaned = cleaned.replace(/,\s*\}/g, '}');
+    cleaned = cleaned.replace(/,\s*\]/g, ']');
+    
+    // Fix missing commas between array elements or object properties
+    cleaned = cleaned.replace(/}\s*{/g, '},{');
+    cleaned = cleaned.replace(/]\s*\[/g, '],[');
+    cleaned = cleaned.replace(/}\s*\[/g, '},[');
+    cleaned = cleaned.replace(/]\s*{/g, '],[');
+    
+    // Remove JavaScript comments
+    cleaned = cleaned.replace(/\/\/.*$/gm, '');
+    cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, '');
+    
+    // Fix malformed keyAchievements strings that have unescaped newlines or quotes
+    const fixKeyAchievements = (match) => {
+      // Replace actual newlines with \\n in key achievements 
+      let fixed = match.replace(/\n/g, '\\n');
+      // Escape unescaped quotes
+      fixed = fixed.replace(/(?<!\\)"/g, '\\"');
+      return fixed;
+    };
+    
+    // Look for keyAchievements patterns and fix them
+    const keyAchPattern = /"keyAchievements"\s*:\s*"(.*?)(?<!\\)"/gs;
+    cleaned = cleaned.replace(keyAchPattern, (match, content) => {
+      return `"keyAchievements":"${fixKeyAchievements(content)}"`;
+    });
+    
+    console.log("Cleaned JSON:", cleaned.substring(0, 200) + "...");
+    return cleaned;
   };
 
   const callLlmApi = async (prompt) => {
     setIsLoading(true);
     setError(null);
 
+    // Update the prompt to more explicitly request valid JSON
+    const enhancedPrompt = `${prompt}\n\nVERY IMPORTANT: Your response MUST be a single, valid JSON object inside a code block. Format it exactly like this:\n\`\`\`json\n{\n  "key": "value",\n  "array": [1, 2, 3]\n}\n\`\`\`\nEnsure all JSON is valid with: proper quotes around keys and string values, commas between elements (but not after the last element), and properly escaped strings. Do not include any explanation text outside the JSON code block.`;
+
     const { provider, model, max_tokens, temperature, systemPrompt } = resumeData.llmConfig;
 
     if (provider === "simulate") {
       console.log("--- SIMULATION MODE ---");
-      console.log("Prompt:", prompt);
+      console.log("Prompt:", enhancedPrompt);
       await new Promise(resolve => setTimeout(resolve, 1500));
       setIsLoading(false);
       const simulatedJsonResponse = JSON.stringify({
@@ -84,24 +197,12 @@ const JobDescriptionTailor = () => {
           ...exp,
           keyAchievements: exp.keyAchievements + "\n- Simulated achievement point."
         }))
-      }, null, 2);
-      const simulatedResponseText = `\`\`\`json\n${simulatedJsonResponse}\n\`\`\``;
-      const tailoredData = extractJson(simulatedResponseText);
-      if (tailoredData) {
-        setResumeData(tailoredData);
-      } else {
-        setError(prev => prev || "Simulation failed to produce valid JSON.");
-      }
-      return;
+      });
+      return simulatedJsonResponse;
     }
 
-    // Always use the local API route
-    const currentApiUrl = '/api/llm';
-
-    console.log("Using API URL:", currentApiUrl);
-
     try {
-      const response = await fetch(currentApiUrl, {
+      const response = await fetch('/api/llm', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -110,26 +211,39 @@ const JobDescriptionTailor = () => {
           provider,
           model,
           system: systemPrompt,
-          messages: [{ role: 'user', content: prompt }],
+          messages: [{ role: 'user', content: enhancedPrompt }],
           max_tokens,
           temperature,
         }),
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: `HTTP error! status: ${response.status}` }));
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+        const errorData = await response.text();
+        throw new Error(`API error: ${response.status} ${errorData}`);
       }
 
-      const result = await response.json();
-      const responseText = result.content?.[0]?.text;
+      const data = await response.json();
+      
+      // Extract the response text based on provider
+      let responseText = '';
+      if (provider === 'anthropic') {
+        // Anthropic returns content directly in this format
+        responseText = data.content;
+      } else if (provider === 'openai') {
+        // OpenAI response might be in a different format
+        responseText = data.content?.[0]?.text || data.choices?.[0]?.message?.content;
+      } else {
+        // Generic fallback for other providers
+        responseText = data.content?.[0]?.text || data.content || JSON.stringify(data);
+      }
 
       if (!responseText) {
+        console.error("Response data structure:", JSON.stringify(data, null, 2));
         throw new Error("LLM response format unexpected or empty.");
       }
 
       const tailoredData = extractJson(responseText);
-
+      
       if (tailoredData) {
         setResumeData(prevData => ({
           ...tailoredData,
@@ -154,7 +268,7 @@ const JobDescriptionTailor = () => {
       console.error("Error tailoring resume:", err);
 
       if (err.name === 'TypeError' && err.message.includes('Failed to fetch')) {
-        setError(`Network error: Could not connect to API at "${currentApiUrl}". Please check your network connection and API URL configuration.`);
+        setError(`Network error: Could not connect to API at "/api/llm". Please check your network connection and API URL configuration.`);
       } else if (err.name === 'SyntaxError') {
         setError(`Invalid response format: ${err.message}`);
       } else {
