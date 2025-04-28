@@ -13,13 +13,28 @@ const JobDescriptionTailor = () => {
 
   const handleLlmConfigChange = (e) => {
     const { name, value } = e.target;
-    setResumeData((prevData) => ({
-      ...prevData,
-      llmConfig: {
+
+    setResumeData((prevData) => {
+      const updatedConfig = {
         ...prevData.llmConfig,
         [name]: value,
-      },
-    }));
+      };
+
+      if (name === "provider" && (!prevData.llmConfig.apiUrl || prevData.llmConfig.apiUrl.trim() === "")) {
+        if (value === "anthropic") {
+          updatedConfig.apiUrl = "/api/anthropic";
+        } else if (value === "openai") {
+          updatedConfig.apiUrl = "/api/openai";
+        } else {
+          updatedConfig.apiUrl = "/api/llm";
+        }
+      }
+
+      return {
+        ...prevData,
+        llmConfig: updatedConfig,
+      };
+    });
   };
 
   const handleJdChange = (e) => {
@@ -56,11 +71,9 @@ const JobDescriptionTailor = () => {
     setError(null);
 
     const { provider, apiUrl, model, max_tokens, temperature, systemPrompt } = resumeData.llmConfig;
-    const currentApiUrl = apiUrl;
 
     if (provider === "simulate") {
       console.log("--- SIMULATION MODE ---");
-      console.log("API URL:", currentApiUrl);
       console.log("Prompt:", prompt);
       await new Promise(resolve => setTimeout(resolve, 1500));
       setIsLoading(false);
@@ -82,6 +95,23 @@ const JobDescriptionTailor = () => {
       return;
     }
 
+    let currentApiUrl = apiUrl || "/api/llm";
+
+    console.log("Original API URL:", currentApiUrl);
+
+    if (!currentApiUrl.startsWith('http://') && 
+        !currentApiUrl.startsWith('https://') && 
+        !currentApiUrl.startsWith('/')) {
+      currentApiUrl = '/' + currentApiUrl;
+    }
+
+    if (currentApiUrl.match(/^[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]/) && 
+        !currentApiUrl.startsWith('http')) {
+      currentApiUrl = 'https://' + currentApiUrl;
+    }
+
+    console.log("Validated API URL:", currentApiUrl);
+
     const payload = {
       provider,
       model: model || (provider === "anthropic" ? "claude-3-haiku-20240307" : "gpt-4o"),
@@ -92,6 +122,9 @@ const JobDescriptionTailor = () => {
     };
 
     try {
+      console.log("Attempting to fetch from:", currentApiUrl);
+      console.log("With payload:", JSON.stringify(payload, null, 2));
+
       const response = await fetch(currentApiUrl, {
         method: "POST",
         headers: {
@@ -101,7 +134,7 @@ const JobDescriptionTailor = () => {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: "Failed to parse error response." }));
+        const errorData = await response.json().catch(() => ({ message: `HTTP error! status: ${response.status}` }));
         throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
       }
 
@@ -136,7 +169,26 @@ const JobDescriptionTailor = () => {
       }
     } catch (err) {
       console.error("Error tailoring resume:", err);
-      setError(`Error: ${err.message}`);
+
+      if (err.name === 'TypeError' && err.message.includes('Failed to fetch')) {
+        setError(`Network error: Could not connect to API at "${currentApiUrl}". Please check your network connection and API URL configuration.`);
+      } else if (err.name === 'SyntaxError') {
+        setError(`Invalid response format: ${err.message}`);
+      } else {
+        setError(`Error: ${err.message}`);
+      }
+
+      if (confirm("API request failed. Would you like to try simulation mode instead?")) {
+        setResumeData(prevData => ({
+          ...prevData,
+          llmConfig: {
+            ...prevData.llmConfig,
+            provider: "simulate"
+          }
+        }));
+
+        setTimeout(() => callLlmApi(prompt), 500);
+      }
     } finally {
       setIsLoading(false);
     }

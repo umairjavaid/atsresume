@@ -45,33 +45,53 @@ export default async function handler(req) {
 
 async function callAnthropic(model, system, messages, max_tokens, temperature) {
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+  const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
   
   if (!ANTHROPIC_API_KEY) {
-    throw new Error('Anthropic API key not configured');
+    throw new Error("Anthropic API key is not configured");
   }
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: model || 'claude-3-haiku-20240307',
-      system: system,
-      messages: messages,
-      max_tokens: max_tokens || 1024,
-      temperature: temperature || 0.5,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Anthropic API error: ${response.status} ${errorText}`);
+  
+  console.log("Calling Anthropic API with model:", model);
+  
+  // Prepare the messages array in Anthropic's format
+  const anthropicMessages = messages.map(msg => ({
+    role: msg.role === 'user' ? 'user' : 'assistant',
+    content: msg.content
+  }));
+  
+  try {
+    const response = await fetch(ANTHROPIC_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: model || 'claude-3-opus-20240229',
+        system: system,
+        messages: anthropicMessages,
+        max_tokens: max_tokens || 4000,
+        temperature: temperature || 0.7
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null);
+      console.error("Anthropic API error:", response.status, errorData);
+      throw new Error(`Anthropic API error: ${response.status} ${errorData ? JSON.stringify(errorData) : response.statusText}`);
+    }
+    
+    const data = await response.json();
+    return {
+      content: data.content[0].text,
+      model: data.model,
+      usage: data.usage
+    };
+  } catch (error) {
+    console.error("Error calling Anthropic:", error.message);
+    throw error;
   }
-
-  return await response.json();
 }
 
 async function callOpenAI(model, system, messages, max_tokens, temperature) {
