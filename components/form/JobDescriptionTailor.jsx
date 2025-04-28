@@ -2,6 +2,7 @@ import React, { useContext, useState } from "react";
 import { ResumeContext } from "../../pages/builder";
 import { FaWandMagicSparkles, FaSave, FaTrash } from "react-icons/fa6";
 import { FiChevronDown, FiChevronUp } from "react-icons/fi";
+import JSON5 from 'json5';
 
 const JobDescriptionTailor = () => {
   const { resumeData, setResumeData } = useContext(ResumeContext);
@@ -54,126 +55,53 @@ const JobDescriptionTailor = () => {
   const extractJson = (text) => {
     console.log("Raw LLM response:", text.substring(0, 500) + "..."); // Log the beginning of the response
     
-    // First try: Look for JSON code block in markdown format with ```json tag
+    // First try: Look for JSON code block in markdown format
     const jsonBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/;
     const jsonBlockMatch = text.match(jsonBlockRegex);
     
     if (jsonBlockMatch && jsonBlockMatch[1]) {
       try {
-        return JSON.parse(jsonBlockMatch[1]);
+        // Use JSON5 which is more forgiving of syntax errors
+        return JSON5.parse(jsonBlockMatch[1]);
       } catch (parseError) {
-        console.error("Failed to parse JSON from code block:", parseError);
-        // Store the JSON text for potential cleanup
-        const jsonText = jsonBlockMatch[1];
-        try {
-          // Try to clean up common JSON syntax issues
-          const cleanedJson = cleanupJsonString(jsonText);
-          return JSON.parse(cleanedJson);
-        } catch (cleanupError) {
-          console.error("Failed to parse JSON even after cleanup:", cleanupError);
-          // Continue to next method rather than failing immediately
-        }
+        console.error("Failed to parse JSON from code block:", parseError.message);
+        // Continue to next method rather than failing immediately
       }
     }
     
-    // Second try: Look for JSON anywhere in the response
-    try {
-      // Try to find JSON object patterns - anything between { and } including all nested content
-      const jsonPattern = /{[\s\S]*}/;
-      const jsonMatch = text.match(jsonPattern);
-      
-      if (jsonMatch) {
-        const jsonText = jsonMatch[0];
-        console.log("Attempting to parse JSON:", jsonText.substring(0, 200) + "...");
-        try {
-          return JSON.parse(jsonText);
-        } catch (parseError) {
-          console.error("JSON parse error:", parseError.message);
-          // Log problematic area
-          const errorPos = findErrorPosition(parseError.message);
-          if (errorPos) {
-            const startPos = Math.max(0, errorPos - 20);
-            const endPos = Math.min(jsonText.length, errorPos + 20);
-            console.error(`JSON error context: "${jsonText.substring(startPos, endPos)}"`);
-          }
-          
-          // Try to clean up and parse again
-          const cleanedJson = cleanupJsonString(jsonText);
-          return JSON.parse(cleanedJson);
-        }
+    // Second try: Look for JSON patterns - anything between { and } including all nested content
+    const jsonPattern = /{[\s\S]*}/;
+    const jsonMatch = text.match(jsonPattern);
+    
+    if (jsonMatch) {
+      const jsonText = jsonMatch[0];
+      console.log("Attempting to parse JSON:", jsonText.substring(0, 200) + "...");
+      try {
+        return JSON5.parse(jsonText);
+      } catch (parseError) {
+        console.error("JSON parse error:", parseError.message);
       }
-    } catch (parseError) {
-      console.error("Failed to parse JSON from pattern matching:", parseError);
     }
     
     // Third try: Check if the entire response is valid JSON
     try {
       const trimmedText = text.trim();
       if (trimmedText.startsWith('{') && trimmedText.endsWith('}')) {
-        try {
-          return JSON.parse(trimmedText);
-        } catch (parseError) {
-          // Try with cleanup
-          const cleanedJson = cleanupJsonString(trimmedText);
-          return JSON.parse(cleanedJson);
-        }
+        return JSON5.parse(trimmedText);
       }
     } catch (finalError) {
-      console.error("Failed to parse entire response as JSON:", finalError);
+      console.error("Failed to parse entire response as JSON:", finalError.message);
+    }
+    
+    // Final attempt: Try parsing the entire text regardless of format
+    try {
+      return JSON5.parse(text);
+    } catch (lastError) {
+      console.error("All JSON parsing attempts failed:", lastError.message);
     }
     
     setError("Could not extract valid JSON from the LLM response. The model may have returned malformed JSON.");
     return null;
-  };
-
-  // Helper function to find position mentioned in JSON parse error
-  const findErrorPosition = (errorMessage) => {
-    const posMatch = errorMessage.match(/position (\d+)/);
-    if (posMatch && posMatch[1]) {
-      return parseInt(posMatch[1], 10);
-    }
-    return null;
-  };
-
-  // Helper function to attempt cleaning up common JSON syntax issues
-  const cleanupJsonString = (jsonString) => {
-    let cleaned = jsonString;
-    
-    // Replace single quotes with double quotes (but not inside already quoted strings)
-    cleaned = cleaned.replace(/(\w+)'/g, '$1"');
-    cleaned = cleaned.replace(/'(\w+)/g, '"$1');
-    
-    // Fix trailing commas in arrays and objects
-    cleaned = cleaned.replace(/,\s*\}/g, '}');
-    cleaned = cleaned.replace(/,\s*\]/g, ']');
-    
-    // Fix missing commas between array elements or object properties
-    cleaned = cleaned.replace(/}\s*{/g, '},{');
-    cleaned = cleaned.replace(/]\s*\[/g, '],[');
-    cleaned = cleaned.replace(/}\s*\[/g, '},[');
-    cleaned = cleaned.replace(/]\s*{/g, '],[');
-    
-    // Remove JavaScript comments
-    cleaned = cleaned.replace(/\/\/.*$/gm, '');
-    cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, '');
-    
-    // Fix malformed keyAchievements strings that have unescaped newlines or quotes
-    const fixKeyAchievements = (match) => {
-      // Replace actual newlines with \\n in key achievements 
-      let fixed = match.replace(/\n/g, '\\n');
-      // Escape unescaped quotes
-      fixed = fixed.replace(/(?<!\\)"/g, '\\"');
-      return fixed;
-    };
-    
-    // Look for keyAchievements patterns and fix them
-    const keyAchPattern = /"keyAchievements"\s*:\s*"(.*?)(?<!\\)"/gs;
-    cleaned = cleaned.replace(keyAchPattern, (match, content) => {
-      return `"keyAchievements":"${fixKeyAchievements(content)}"`;
-    });
-    
-    console.log("Cleaned JSON:", cleaned.substring(0, 200) + "...");
-    return cleaned;
   };
 
   const callLlmApi = async (prompt) => {
@@ -181,7 +109,7 @@ const JobDescriptionTailor = () => {
     setError(null);
 
     // Update the prompt to more explicitly request valid JSON
-    const enhancedPrompt = `${prompt}\n\nVERY IMPORTANT: Your response MUST be a single, valid JSON object inside a code block. Format it exactly like this:\n\`\`\`json\n{\n  "key": "value",\n  "array": [1, 2, 3]\n}\n\`\`\`\nEnsure all JSON is valid with: proper quotes around keys and string values, commas between elements (but not after the last element), and properly escaped strings. Do not include any explanation text outside the JSON code block.`;
+    const enhancedPrompt = `${prompt}\n\nVERY IMPORTANT: Your response MUST be a single, valid JSON object inside a code block. Format it exactly like this:\n\`\`\`json\n{\n  "key": "value",\n  "array": [1, 2, 3]\n}\n\`\`\`\nEnsure all JSON is valid with proper quotes around keys and string values.`;
 
     const { provider, model, max_tokens, temperature, systemPrompt } = resumeData.llmConfig;
 
