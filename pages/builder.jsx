@@ -14,6 +14,7 @@ import Projects from "../components/form/Projects";
 import Education from "../components/form/Education";
 import dynamic from "next/dynamic";
 import Certification from "../components/form/certification";
+import JobDescriptionTailor from "../components/form/JobDescriptionTailor";
 
 const ResumeContext = createContext(null);
 
@@ -31,7 +32,19 @@ export default function Builder(props) {
     const savedData = localStorage.getItem("resumeData");
     if (savedData) {
       try {
-        setResumeData(JSON.parse(savedData));
+        const parsedData = JSON.parse(savedData);
+        // Deep merge saved data with defaults, prioritizing saved data
+        // Ensure llmConfig and savedResumes are properly merged/initialized
+        setResumeData({
+          ...DefaultResumeData, // Start with defaults
+          ...parsedData,       // Override with saved data
+          llmConfig: {         // Deep merge llmConfig
+            ...DefaultResumeData.llmConfig,
+            ...(parsedData.llmConfig || {}),
+          },
+          // Ensure savedResumes is an array, even if missing in saved data
+          savedResumes: Array.isArray(parsedData.savedResumes) ? parsedData.savedResumes : [],
+        });
       } catch (error) {
         console.error("Error parsing resume data from localStorage:", error);
         // Fallback to default data if parsing fails
@@ -76,7 +89,7 @@ export default function Builder(props) {
 
   // Render loading state or null if resumeData is not yet loaded
   if (!resumeData) {
-    return <div>Loading...</div>; // Or any other loading indicator
+    return <div className="p-10 text-center">Loading Resume Data...</div>; // Or any other loading indicator
   }
 
   return (
@@ -90,28 +103,24 @@ export default function Builder(props) {
         }}
       >
         <Meta
-          title="ATSResume | Get hired with an ATS-optimized resume"
+          title="ATSResume | AI-Powered ATS Resume Builder"
           description="ATSResume is a cutting-edge resume builder that helps job seekers create a professional, ATS-friendly resume in minutes. Our platform uses the latest technology to analyze and optimize your resume for maximum visibility and success with applicant tracking systems. Say goodbye to frustration and wasted time spent on manual resume formatting. Create your winning resume with ATSResume today and get noticed by employers."
           keywords="ATS-friendly, Resume optimization, Keyword-rich resume, Applicant Tracking System, ATS resume builder, ATS resume templates, ATS-compliant resume, ATS-optimized CV, ATS-friendly format, ATS resume tips, Resume writing services, Career guidance, Job search in India, Resume tips for India, Professional resume builder, Cover letter writing, Interview preparation, Job interview tips, Career growth, Online job applications, resume builder, free resume builder, resume ats, best free resume builder, resume creator, resume cv, resume design, resume editor, resume maker"
         />
         <div className="f-col gap-4 md:flex-row justify-evenly max-w-7xl md:mx-auto md:h-screen">
           {!formClose && (
             <form className="p-4 bg-fuchsia-600 exclude-print md:max-w-[40%] md:h-screen md:overflow-y-scroll">
-              <LoadUnload/>
+              <JobDescriptionTailor />
+              <LoadUnload />
               <PersonalInformation />
               <SocialMedia />
               <Summary />
               <Education />
               <WorkExperience />
               <Projects />
-              {
-                resumeData.skills.map((skill, index) => (
-                  <Skill
-                    title={skill.title}
-                    key={index}
-                  />
-                ))
-              }
+              {resumeData.skills.map((skill, index) => (
+                <Skill title={skill.title} key={index} />
+              ))}
               <Language />
               <Certification />
             </form>
