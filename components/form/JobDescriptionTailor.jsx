@@ -70,7 +70,7 @@ const JobDescriptionTailor = () => {
     setIsLoading(true);
     setError(null);
 
-    const { provider, apiUrl, model, max_tokens, temperature, systemPrompt } = resumeData.llmConfig;
+    const { provider, model, max_tokens, temperature, systemPrompt } = resumeData.llmConfig;
 
     if (provider === "simulate") {
       console.log("--- SIMULATION MODE ---");
@@ -95,42 +95,25 @@ const JobDescriptionTailor = () => {
       return;
     }
 
-    let currentApiUrl = apiUrl || "/api/llm";
+    // Always use the local API route
+    const currentApiUrl = '/api/llm';
 
-    console.log("Original API URL:", currentApiUrl);
-
-    if (!currentApiUrl.startsWith('http://') && 
-        !currentApiUrl.startsWith('https://') && 
-        !currentApiUrl.startsWith('/')) {
-      currentApiUrl = '/' + currentApiUrl;
-    }
-
-    if (currentApiUrl.match(/^[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]/) && 
-        !currentApiUrl.startsWith('http')) {
-      currentApiUrl = 'https://' + currentApiUrl;
-    }
-
-    console.log("Validated API URL:", currentApiUrl);
-
-    const payload = {
-      provider,
-      model: model || (provider === "anthropic" ? "claude-3-haiku-20240307" : "gpt-4o"),
-      max_tokens: max_tokens || 1024,
-      temperature: temperature || 0.5,
-      system: systemPrompt,
-      messages: [{ role: "user", content: prompt }],
-    };
+    console.log("Using API URL:", currentApiUrl);
 
     try {
-      console.log("Attempting to fetch from:", currentApiUrl);
-      console.log("With payload:", JSON.stringify(payload, null, 2));
-
       const response = await fetch(currentApiUrl, {
-        method: "POST",
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          provider,
+          model,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens,
+          temperature,
+        }),
       });
 
       if (!response.ok) {
