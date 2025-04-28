@@ -154,14 +154,17 @@ const DefaultResumeData = {
   ],
   jobDescription: "", // To store the target job description
   llmConfig: {
-    apiUrl: "/api/anthropic", // Use the correct local proxy URL
+    apiUrl: "/api/llm", // Use a generic endpoint that will route to the appropriate provider
     provider: "simulate", // Always default to simulation mode for safety
+    model: "", // Will use provider-specific defaults if empty
+    max_tokens: 1024,
+    temperature: 0.5,
     systemPrompt: `You are an expert resume tailoring assistant. Given a resume (in JSON format) and a job description (in text format), rewrite the resume sections (summary, work experience descriptions & key achievements, project descriptions & key achievements) to better match the keywords and requirements in the job description. Make minimal changes, keeping the core meaning and structure intact. Focus on incorporating relevant skills and experiences mentioned in the job description into the existing resume content. Do not invent new experiences or add sections not present in the original JSON. Ensure all original fields like 'name', 'position', 'contactInformation', 'email', 'address', 'profilePicture', 'socialMedia', 'education', 'skills', 'languages', 'certifications', 'llmConfig', 'jobDescription', 'instructionPrompt', 'savedResumes' are preserved exactly as they were in the input JSON. Output ONLY the updated complete resume object in valid JSON format, enclosed within a single \`\`\`json ... \`\`\` block.`,
     userPromptTemplate: `Tailor the following resume:\n\n\`\`\`json\n{resume}\n\`\`\`\n\nTo match this job description:\n\n\`\`\`text\n{job_description}\n\`\`\`\n\nRespond with the updated complete resume in JSON format, enclosed in a markdown code block.`,
     refinePromptTemplate: `Refine the following resume:\n\n\`\`\`json\n{resume}\n\`\`\`\n\nBased on this instruction:\n\n\`\`\`text\n{instruction}\n\`\`\`\n\nFollow the same rules as the initial tailoring: make minimal changes, preserve all original fields not directly related to the instruction (like personal info, config, etc.), and respond ONLY with the updated complete resume object in valid JSON format, enclosed within a single \`\`\`json ... \`\`\` block.`,
   },
   instructionPrompt: "", // For refinement instructions
-  savedResumes: [], // Array to store { name: '...', jd: '...', resumeData: {...} }
+  savedResumes: [], // Array to store saved resume versions
 };
 
 export default DefaultResumeData;

@@ -1,22 +1,40 @@
 import React, { useContext, useState } from "react";
 import { ResumeContext } from "../../pages/builder";
-import { FaWandMagicSparkles } from "react-icons/fa6";
+import { FaWandMagicSparkles, FaSave, FaTrash } from "react-icons/fa6";
+import { FiChevronDown, FiChevronUp } from "react-icons/fi";
 
 const JobDescriptionTailor = () => {
   const { resumeData, setResumeData } = useContext(ResumeContext);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [showConfig, setShowConfig] = useState(false);
+  const [saveVersionName, setSaveVersionName] = useState("");
+  const [showSavedVersions, setShowSavedVersions] = useState(false);
 
   const handleLlmConfigChange = (e) => {
     const { name, value } = e.target;
-    setResumeData((prevData) => ({
-      ...prevData,
-      llmConfig: {
+
+    setResumeData((prevData) => {
+      const updatedConfig = {
         ...prevData.llmConfig,
         [name]: value,
-      },
-    }));
+      };
+
+      if (name === "provider" && (!prevData.llmConfig.apiUrl || prevData.llmConfig.apiUrl.trim() === "")) {
+        if (value === "anthropic") {
+          updatedConfig.apiUrl = "/api/anthropic";
+        } else if (value === "openai") {
+          updatedConfig.apiUrl = "/api/openai";
+        } else {
+          updatedConfig.apiUrl = "/api/llm";
+        }
+      }
+
+      return {
+        ...prevData,
+        llmConfig: updatedConfig,
+      };
+    });
   };
 
   const handleJdChange = (e) => {
@@ -52,12 +70,10 @@ const JobDescriptionTailor = () => {
     setIsLoading(true);
     setError(null);
 
-    const { provider, apiUrl, model, max_tokens, temperature, systemPrompt } = resumeData.llmConfig;
-    const currentApiUrl = apiUrl;
+    const { provider, model, max_tokens, temperature, systemPrompt } = resumeData.llmConfig;
 
     if (provider === "simulate") {
       console.log("--- SIMULATION MODE ---");
-      console.log("API URL:", currentApiUrl);
       console.log("Prompt:", prompt);
       await new Promise(resolve => setTimeout(resolve, 1500));
       setIsLoading(false);
@@ -79,25 +95,29 @@ const JobDescriptionTailor = () => {
       return;
     }
 
-    const payload = {
-      model: model || "claude-3-haiku-20240307",
-      max_tokens: max_tokens || 1024,
-      temperature: temperature || 0.5,
-      system: systemPrompt,
-      messages: [{ role: "user", content: prompt }],
-    };
+    // Always use the local API route
+    const currentApiUrl = '/api/llm';
+
+    console.log("Using API URL:", currentApiUrl);
 
     try {
       const response = await fetch(currentApiUrl, {
-        method: "POST",
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          provider,
+          model,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens,
+          temperature,
+        }),
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: "Failed to parse error response." }));
+        const errorData = await response.json().catch(() => ({ message: `HTTP error! status: ${response.status}` }));
         throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
       }
 
@@ -132,7 +152,26 @@ const JobDescriptionTailor = () => {
       }
     } catch (err) {
       console.error("Error tailoring resume:", err);
-      setError(`Error: ${err.message}`);
+
+      if (err.name === 'TypeError' && err.message.includes('Failed to fetch')) {
+        setError(`Network error: Could not connect to API at "${currentApiUrl}". Please check your network connection and API URL configuration.`);
+      } else if (err.name === 'SyntaxError') {
+        setError(`Invalid response format: ${err.message}`);
+      } else {
+        setError(`Error: ${err.message}`);
+      }
+
+      if (confirm("API request failed. Would you like to try simulation mode instead?")) {
+        setResumeData(prevData => ({
+          ...prevData,
+          llmConfig: {
+            ...prevData.llmConfig,
+            provider: "simulate"
+          }
+        }));
+
+        setTimeout(() => callLlmApi(prompt), 500);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -182,21 +221,141 @@ const JobDescriptionTailor = () => {
     callLlmApi(prompt);
   };
 
+  const saveResumeVersion = () => {
+    if (!saveVersionName.trim()) {
+      setError("Please enter a name for this resume version.");
+      return;
+    }
+
+    const resumeToSave = { ...resumeData };
+
+    const newSavedResume = {
+      name: saveVersionName,
+      timestamp: new Date().toISOString(),
+      jobDescription: resumeData.jobDescription,
+      data: resumeToSave
+    };
+
+    setResumeData(prevData => ({
+      ...prevData,
+      savedResumes: [...(prevData.savedResumes || []), newSavedResume]
+    }));
+
+    setSaveVersionName("");
+    setError(null);
+  };
+
+  const loadResumeVersion = (versionIndex) => {
+    const versionToLoad = resumeData.savedResumes[versionIndex];
+
+    if (!versionToLoad) {
+      setError("Failed to load saved version.");
+      return;
+    }
+
+    const currentSavedResumes = [...resumeData.savedResumes];
+    const currentLlmConfig = { ...resumeData.llmConfig };
+
+    setResumeData({
+      ...versionToLoad.data,
+      savedResumes: currentSavedResumes,
+      llmConfig: currentLlmConfig
+    });
+
+    setError(null);
+  };
+
+  const deleteResumeVersion = (versionIndex, e) => {
+    e.stopPropagation();
+
+    const updatedVersions = [...resumeData.savedResumes];
+    updatedVersions.splice(versionIndex, 1);
+
+    setResumeData(prevData => ({
+      ...prevData,
+      savedResumes: updatedVersions
+    }));
+  };
+
   return (
     <div className="flex-col-gap-2 mb-4 p-4 border border-dashed border-gray-300 rounded bg-fuchsia-700/30">
       <div className="flex justify-between items-center">
         <h2 className="input-title text-white flex items-center gap-2">
           <FaWandMagicSparkles /> AI Resume Tailor
         </h2>
-        <button
-          type="button"
-          onClick={() => setShowConfig(!showConfig)}
-          className="text-xs text-white underline hover:text-fuchsia-200"
-          title="Toggle LLM Configuration"
-        >
-          {showConfig ? 'Hide Config' : 'Show Config'}
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setShowSavedVersions(!showSavedVersions)}
+            className="text-xs text-white underline hover:text-fuchsia-200 flex items-center"
+            title="Toggle Saved Versions"
+          >
+            {showSavedVersions ? 'Hide Versions' : 'Saved Versions'} 
+            {resumeData.savedResumes?.length > 0 && ` (${resumeData.savedResumes.length})`}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowConfig(!showConfig)}
+            className="text-xs text-white underline hover:text-fuchsia-200 flex items-center"
+            title="Toggle LLM Configuration"
+          >
+            {showConfig ? 'Hide Config' : 'Show Config'}
+          </button>
+        </div>
       </div>
+
+      {showSavedVersions && (
+        <div className="mt-2 bg-fuchsia-800/50 rounded p-2">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-white">Saved Resume Versions</h3>
+            <div className="flex gap-2 items-center">
+              <input
+                type="text"
+                placeholder="Version name..."
+                value={saveVersionName}
+                onChange={(e) => setSaveVersionName(e.target.value)}
+                className="px-2 py-1 text-xs rounded bg-fuchsia-900/50 text-white w-40"
+              />
+              <button
+                type="button"
+                onClick={saveResumeVersion}
+                className="bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1"
+                title="Save current resume version"
+              >
+                <FaSave size={12} /> Save
+              </button>
+            </div>
+          </div>
+          
+          {resumeData.savedResumes?.length > 0 ? (
+            <div className="max-h-40 overflow-y-auto">
+              {resumeData.savedResumes.map((version, index) => (
+                <div 
+                  key={index}
+                  onClick={() => loadResumeVersion(index)}
+                  className="flex justify-between items-center p-2 text-xs text-white bg-fuchsia-900/30 hover:bg-fuchsia-900/50 mb-1 rounded cursor-pointer"
+                >
+                  <div>
+                    <div className="font-medium">{version.name}</div>
+                    <div className="text-fuchsia-300 text-xs">
+                      {new Date(version.timestamp).toLocaleString()}
+                    </div>
+                  </div>
+                  <button
+                    onClick={(e) => deleteResumeVersion(index, e)}
+                    className="text-fuchsia-300 hover:text-white"
+                    title="Delete this version"
+                  >
+                    <FaTrash size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-fuchsia-300 text-xs italic">No saved versions yet. Tailor your resume and save versions for different job applications.</p>
+          )}
+        </div>
+      )}
 
       {showConfig && (
         <div className="flex-col-gap-2 p-3 bg-fuchsia-800/50 rounded mt-2">
@@ -209,26 +368,56 @@ const JobDescriptionTailor = () => {
             className="w-full other-input text-sm"
           >
             <option value="simulate">Simulate (No API call)</option>
-            <option value="anthropic">Anthropic (via backend)</option>
+            <option value="anthropic">Anthropic Claude</option>
+            <option value="openai">OpenAI GPT</option>
           </select>
 
           <label className="text-xs text-white block">Model:</label>
           <input
             type="text"
             name="model"
-            placeholder="e.g., claude-3-haiku-20240307"
+            placeholder={resumeData.llmConfig.provider === "anthropic" ? "claude-3-haiku-20240307" : "gpt-4o"}
             value={resumeData.llmConfig.model || ""}
             onChange={handleLlmConfigChange}
             className="w-full other-input text-sm"
           />
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-white block">Max Tokens:</label>
+              <input
+                type="number"
+                name="max_tokens"
+                placeholder="1024"
+                value={resumeData.llmConfig.max_tokens || ""}
+                onChange={handleLlmConfigChange}
+                className="w-full other-input text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-white block">Temperature:</label>
+              <input
+                type="number"
+                name="temperature"
+                step="0.1"
+                min="0"
+                max="1"
+                placeholder="0.5"
+                value={resumeData.llmConfig.temperature || ""}
+                onChange={handleLlmConfigChange}
+                className="w-full other-input text-sm"
+              />
+            </div>
+          </div>
 
           <label className="text-xs text-white block">API URL (Backend Proxy):</label>
           <input
             type="text"
             name="apiUrl"
             value={resumeData.llmConfig.apiUrl}
-            readOnly
-            className="w-full other-input text-sm bg-gray-600 text-gray-300 cursor-not-allowed"
+            onChange={handleLlmConfigChange}
+            className="w-full other-input text-sm"
+            placeholder="/api/llm"
           />
         </div>
       )}
@@ -250,7 +439,7 @@ const JobDescriptionTailor = () => {
             : "bg-fuchsia-700 hover:bg-fuchsia-800"
         }`}
       >
-        {isLoading ? "Tailoring..." : "Tailor Resume to JD"}
+        {isLoading ? "Tailoring..." : "Tailor Resume to Job Description"}
       </button>
 
       <textarea
