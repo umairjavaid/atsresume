@@ -11,32 +11,12 @@ const JobDescriptionTailor = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [saveVersionName, setSaveVersionName] = useState("");
   const [showSavedVersions, setShowSavedVersions] = useState(false);
-
-  const handleLlmConfigChange = (e) => {
-    const { name, value } = e.target;
-
-    setResumeData((prevData) => {
-      const updatedConfig = {
-        ...prevData.llmConfig,
-        [name]: value,
-      };
-
-      if (name === "provider" && (!prevData.llmConfig.apiUrl || prevData.llmConfig.apiUrl.trim() === "")) {
-        if (value === "anthropic") {
-          updatedConfig.apiUrl = "/api/anthropic";
-        } else if (value === "openai") {
-          updatedConfig.apiUrl = "/api/openai";
-        } else {
-          updatedConfig.apiUrl = "/api/llm";
-        }
-      }
-
-      return {
-        ...prevData,
-        llmConfig: updatedConfig,
-      };
-    });
-  };
+  const [jsonDiagnostics, setJsonDiagnostics] = useState(null);
+  const [progressStage, setProgressStage] = useState(0);
+  const [progressMessage, setProgressMessage] = useState("");
+  const [retryCount, setRetryCount] = useState(0);
+  const [sectionProgress, setSectionProgress] = useState({});
+  const [currentSection, setCurrentSection] = useState(null);
 
   const handleJdChange = (e) => {
     setResumeData((prevData) => ({
@@ -52,215 +32,26 @@ const JobDescriptionTailor = () => {
     }));
   };
 
-  const extractJson = (text) => {
-    console.log("Raw LLM response:", text.substring(0, 500) + "..."); // Log the beginning of the response
-    
-    // First try: Look for JSON code block in markdown format
-    const jsonBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/;
-    const jsonBlockMatch = text.match(jsonBlockRegex);
-    
-    if (jsonBlockMatch && jsonBlockMatch[1]) {
-      try {
-        // Use JSON5 which is more forgiving of syntax errors
-        return JSON5.parse(jsonBlockMatch[1]);
-      } catch (parseError) {
-        console.error("Failed to parse JSON from code block:", parseError.message);
-        // Continue to next method rather than failing immediately
-      }
-    }
-    
-    // Second try: Look for JSON patterns - anything between { and } including all nested content
-    const jsonPattern = /{[\s\S]*}/;
-    const jsonMatch = text.match(jsonPattern);
-    
-    if (jsonMatch) {
-      const jsonText = jsonMatch[0];
-      console.log("Attempting to parse JSON:", jsonText.substring(0, 200) + "...");
-      try {
-        return JSON5.parse(jsonText);
-      } catch (parseError) {
-        console.error("JSON parse error:", parseError.message);
-      }
-    }
-    
-    // Third try: Check if the entire response is valid JSON
-    try {
-      const trimmedText = text.trim();
-      if (trimmedText.startsWith('{') && trimmedText.endsWith('}')) {
-        return JSON5.parse(trimmedText);
-      }
-    } catch (finalError) {
-      console.error("Failed to parse entire response as JSON:", finalError.message);
-    }
-    
-    // Final attempt: Try parsing the entire text regardless of format
-    try {
-      return JSON5.parse(text);
-    } catch (lastError) {
-      console.error("All JSON parsing attempts failed:", lastError.message);
-    }
-    
-    setError("Could not extract valid JSON from the LLM response. The model may have returned malformed JSON.");
-    return null;
-  };
+  const handleLlmConfigChange = (e) => {
+    const { name, value } = e.target;
 
-  const callLlmApi = async (prompt) => {
-    setIsLoading(true);
-    setError(null);
-
-    // Update the prompt to more explicitly request valid JSON
-    const enhancedPrompt = `${prompt}\n\nVERY IMPORTANT: Your response MUST be a single, valid JSON object inside a code block. Format it exactly like this:\n\`\`\`json\n{\n  "key": "value",\n  "array": [1, 2, 3]\n}\n\`\`\`\nEnsure all JSON is valid with proper quotes around keys and string values.`;
-
-    const { provider, model, max_tokens, temperature, systemPrompt } = resumeData.llmConfig;
-
-    if (provider === "simulate") {
-      console.log("--- SIMULATION MODE ---");
-      console.log("Prompt:", enhancedPrompt);
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      setIsLoading(false);
-      const simulatedJsonResponse = JSON.stringify({
-        ...resumeData,
-        summary: "This is a *simulated* tailored summary based on the job description.",
-        workExperience: resumeData.workExperience.map(exp => ({
-          ...exp,
-          keyAchievements: exp.keyAchievements + "\n- Simulated achievement point."
-        }))
-      });
-      return simulatedJsonResponse;
-    }
-
-    try {
-      const response = await fetch('/api/llm', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          provider,
-          model,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: enhancedPrompt }],
-          max_tokens,
-          temperature,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`API error: ${response.status} ${errorData}`);
-      }
-
-      const data = await response.json();
+    setResumeData((prevData) => {
+      const currentConfig = prevData.llmConfig || {};
       
-      // Extract the response text based on provider
-      let responseText = '';
-      if (provider === 'anthropic') {
-        // Anthropic returns content directly in this format
-        responseText = data.content;
-      } else if (provider === 'openai') {
-        // OpenAI response might be in a different format
-        responseText = data.content?.[0]?.text || data.choices?.[0]?.message?.content;
-      } else {
-        // Generic fallback for other providers
-        responseText = data.content?.[0]?.text || data.content || JSON.stringify(data);
+      const updatedConfig = {
+        ...currentConfig,
+        [name]: value,
+      };
+
+      if (name === "provider" && (!currentConfig.apiUrl || currentConfig.apiUrl.trim() === "")) {
+        updatedConfig.apiUrl = "/api/llm";
       }
 
-      if (!responseText) {
-        console.error("Response data structure:", JSON.stringify(data, null, 2));
-        throw new Error("LLM response format unexpected or empty.");
-      }
-
-      const tailoredData = extractJson(responseText);
-      
-      if (tailoredData) {
-        setResumeData(prevData => ({
-          ...tailoredData,
-          llmConfig: prevData.llmConfig,
-          jobDescription: prevData.jobDescription,
-          instructionPrompt: prevData.instructionPrompt,
-          savedResumes: prevData.savedResumes,
-          profilePicture: prevData.profilePicture,
-          name: tailoredData.name ?? prevData.name,
-          position: tailoredData.position ?? prevData.position,
-          contactInformation: tailoredData.contactInformation ?? prevData.contactInformation,
-          email: tailoredData.email ?? prevData.email,
-          address: tailoredData.address ?? prevData.address,
-          socialMedia: tailoredData.socialMedia ?? prevData.socialMedia,
-          education: tailoredData.education ?? prevData.education,
-          skills: tailoredData.skills ?? prevData.skills,
-          languages: tailoredData.languages ?? prevData.languages,
-          certifications: tailoredData.certifications ?? prevData.certifications,
-        }));
-      }
-    } catch (err) {
-      console.error("Error tailoring resume:", err);
-
-      if (err.name === 'TypeError' && err.message.includes('Failed to fetch')) {
-        setError(`Network error: Could not connect to API at "/api/llm". Please check your network connection and API URL configuration.`);
-      } else if (err.name === 'SyntaxError') {
-        setError(`Invalid response format: ${err.message}`);
-      } else {
-        setError(`Error: ${err.message}`);
-      }
-
-      if (confirm("API request failed. Would you like to try simulation mode instead?")) {
-        setResumeData(prevData => ({
-          ...prevData,
-          llmConfig: {
-            ...prevData.llmConfig,
-            provider: "simulate"
-          }
-        }));
-
-        setTimeout(() => callLlmApi(prompt), 500);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const tailorResume = () => {
-    const { userPromptTemplate } = resumeData.llmConfig;
-    const { jobDescription } = resumeData;
-
-    if (!jobDescription) {
-      setError("Please paste the job description first.");
-      return;
-    }
-
-    const resumeForLlm = { ...resumeData };
-    delete resumeForLlm.llmConfig;
-    delete resumeForLlm.jobDescription;
-    delete resumeForLlm.instructionPrompt;
-    delete resumeForLlm.savedResumes;
-
-    const prompt = userPromptTemplate
-      .replace("{resume}", JSON.stringify(resumeForLlm, null, 2))
-      .replace("{job_description}", jobDescription);
-
-    callLlmApi(prompt);
-  };
-
-  const refineResume = () => {
-    const { refinePromptTemplate } = resumeData.llmConfig;
-    const { instructionPrompt } = resumeData;
-
-    if (!instructionPrompt) {
-      setError("Please enter refinement instructions first.");
-      return;
-    }
-
-    const resumeForLlm = { ...resumeData };
-    delete resumeForLlm.llmConfig;
-    delete resumeForLlm.jobDescription;
-    delete resumeForLlm.instructionPrompt;
-    delete resumeForLlm.savedResumes;
-
-    const prompt = refinePromptTemplate
-      .replace("{resume}", JSON.stringify(resumeForLlm, null, 2))
-      .replace("{instruction}", instructionPrompt);
-
-    callLlmApi(prompt);
+      return {
+        ...prevData,
+        llmConfig: updatedConfig,
+      };
+    });
   };
 
   const saveResumeVersion = () => {
@@ -270,7 +61,7 @@ const JobDescriptionTailor = () => {
     }
 
     const resumeToSave = { ...resumeData };
-
+    
     const newSavedResume = {
       name: saveVersionName,
       timestamp: new Date().toISOString(),
@@ -319,6 +110,448 @@ const JobDescriptionTailor = () => {
     }));
   };
 
+  const prepareResumeForLlm = (originalData) => {
+    const optimizedData = JSON.parse(JSON.stringify(originalData));
+    
+    delete optimizedData.llmConfig;
+    delete optimizedData.jobDescription;
+    delete optimizedData.instructionPrompt;
+    delete optimizedData.savedResumes;
+    
+    if (optimizedData.profilePicture && optimizedData.profilePicture.length > 1000) {
+      optimizedData.profilePicture = "";
+    }
+    
+    return optimizedData;
+  };
+
+  const callLlmApiWithRetry = async (prompt, maxRetries = 1, initialDelay = 1000) => {
+    let attempt = 0;
+    let delay = initialDelay;
+    let lastError = null;
+
+    while (attempt < maxRetries) {
+      try {
+        setProgressMessage(`${attempt > 0 ? `Retry ${attempt}/${maxRetries}: ` : ''}Processing request...`);
+        const response = await callLlmForSection(prompt);
+        console.log("LLM response received, length:", response?.length || 0);
+        return response;
+      } catch (error) {
+        lastError = error;
+        attempt++;
+        setRetryCount(attempt);
+        console.error(`Attempt ${attempt}/${maxRetries} failed:`, error);
+        
+        const isOverloaded = error.message && (
+          error.message.includes('overloaded') || 
+          error.message.includes('rate_limit') || 
+          error.message.includes('429')
+        );
+        
+        if (attempt >= maxRetries) {
+          setProgressMessage(`API request failed. Error: ${error.message}`);
+          throw error;
+        }
+        
+        if (!isOverloaded) {
+          setProgressMessage(`API error: ${error.message}. Not retrying for non-overload errors.`);
+          throw error;
+        }
+        
+        const jitter = Math.random() * 0.3 + 0.85;
+        delay = Math.min(delay * 2 * jitter, 5000);
+        
+        setProgressMessage(`Service overloaded. Retry ${attempt}/${maxRetries} in ${Math.round(delay/1000)}s... (${error.message})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    
+    throw lastError || new Error('All retry attempts failed');
+  };
+
+  const callLlmForSection = async (prompt) => {
+    const { provider, model, max_tokens, temperature, systemPrompt } = resumeData.llmConfig || {};
+    
+    // Default provider if not set
+    const effectiveProvider = provider || "anthropic";
+    
+    // Valid model lists
+    const validAnthropicModels = [
+      "claude-3-haiku-20240307",
+      "claude-3-opus-20240229",
+      "claude-3-sonnet-20240229",
+      "claude-2.1", 
+      "claude-2.0",
+      "claude-instant-1.2"
+    ];
+    
+    const validOpenAIModels = [
+      "gpt-4o",
+      "gpt-4-turbo",
+      "gpt-4",
+      "gpt-3.5-turbo",
+      "text-davinci-003"
+    ];
+    
+    // Clean up model name (trim spaces) and validate against known models
+    let effectiveModel;
+    if (effectiveProvider === "anthropic") {
+      // Trim any whitespace from the model name
+      const trimmedModel = model?.trim();
+      // Check if it's a valid Anthropic model
+      if (trimmedModel && validAnthropicModels.some(m => trimmedModel.startsWith(m))) {
+        effectiveModel = trimmedModel;
+      } else {
+        // Default to a known good model
+        effectiveModel = "claude-3-haiku-20240307";
+      }
+    } else {
+      // For OpenAI
+      const trimmedModel = model?.trim();
+      if (trimmedModel && validOpenAIModels.some(m => trimmedModel.startsWith(m))) {
+        effectiveModel = trimmedModel;
+      } else {
+        effectiveModel = "gpt-3.5-turbo";
+      }
+    }
+
+    try {
+      console.log(`Using ${effectiveProvider} with model: '${effectiveModel}'`);
+      
+      const response = await fetch('/api/llm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: effectiveProvider,
+          model: effectiveModel,
+          system: systemPrompt || "You are a professional resume tailoring assistant. Provide concise, targeted content for the specific resume section.",
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens,
+          temperature,
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.text();
+        let parsedError;
+        try {
+          parsedError = JSON.parse(errorData);
+        } catch (e) {
+          parsedError = { message: errorData };
+        }
+        
+        const errorMessage = parsedError.message || errorData;
+        if (errorMessage.includes('API key') || response.status === 401) {
+          const error = new Error(`API key error: ${provider === 'openai' ? 'OpenAI' : 'Anthropic'} API key is invalid or missing. Please set up your API key in the environment variables.`);
+          error.status = response.status;
+          error.type = 'API_KEY_ERROR';
+          throw error;
+        }
+        
+        const error = new Error(`API error: ${response.status} ${errorData}`);
+        error.status = response.status;
+        error.type = parsedError.type || 'UNKNOWN_ERROR';
+        throw error;
+      }
+      
+      const data = await response.json();
+      return extractResponseText(data, provider);
+    } catch (error) {
+      console.error("Error calling LLM for section:", error);
+      throw error;
+    }
+  };
+
+  const extractResponseText = (data, provider) => {
+    try {
+      if (provider === 'anthropic') {
+        return data.content || "";
+      } else if (provider === 'openai') {
+        return data.content?.[0]?.text || data.choices?.[0]?.message?.content || "";
+      } else {
+        return data.content?.[0]?.text || data.content || JSON.stringify(data);
+      }
+    } catch (error) {
+      console.error("Error extracting response text:", error);
+      return data.toString();
+    }
+  };
+
+  const tailorResumeBySection = async () => {
+    setIsLoading(true);
+    setError(null);
+    setProgressStage(1);
+    setRetryCount(0);
+    setJsonDiagnostics(null);
+    setSectionProgress({});
+
+    const { jobDescription } = resumeData;
+    if (!jobDescription) {
+      setError("Please paste the job description first.");
+      setIsLoading(false);
+      setProgressStage(0);
+      return;
+    }
+
+    try {
+      try {
+        const testPrompt = "API connection test";
+        await callLlmForSection(testPrompt);
+      } catch (error) {
+        if (error.message && error.message.includes('API key')) {
+          setError(`API Key Error: You need to provide a valid ${resumeData.llmConfig?.provider || 'LLM'} API key in your .env.local file. 
+          
+          1. Make sure you have a .env.local file in the project root
+          2. Add your API key: ${resumeData.llmConfig?.provider === 'anthropic' ? 'ANTHROPIC_API_KEY=your_key_here' : 'OPENAI_API_KEY=your_key_here'}
+          3. Restart the application`);
+        } else {
+          setError(`API Test Failed: ${error.message}
+          
+          Please check your API configuration and try again.`);
+        }
+        setIsLoading(false);
+        setProgressStage(0);
+        return;
+      }
+
+      const baseResumeData = prepareResumeForLlm(resumeData);
+      let successCount = 0;
+      let totalSections = 0;
+
+      setCurrentSection("summary");
+      setProgressMessage("Tailoring professional summary...");
+      totalSections++;
+
+      try {
+        const summaryPrompt = createSectionPrompt("summary", baseResumeData.summary, jobDescription);
+        const summaryResponse = await callLlmApiWithRetry(summaryPrompt);
+        const tailoredSummary = extractSummaryContent(summaryResponse);
+
+        if (tailoredSummary && updateResumeSection("summary", tailoredSummary)) {
+          successCount++;
+          setSectionProgress(prev => ({ ...prev, summary: 'success' }));
+        } else {
+          setSectionProgress(prev => ({ ...prev, summary: 'failed' }));
+        }
+      } catch (error) {
+        console.error("Error tailoring summary:", error);
+        setSectionProgress(prev => ({ ...prev, summary: 'failed' }));
+      }
+
+      setCurrentSection("workExperience");
+      setProgressStage(2);
+
+      for (let i = 0; i < baseResumeData.workExperience.length; i++) {
+        totalSections++;
+        const experience = baseResumeData.workExperience[i];
+
+        setProgressMessage(`Tailoring work experience ${i + 1}/${baseResumeData.workExperience.length}...`);
+
+        try {
+          const experiencePrompt = createSectionPrompt("workExperience", experience, jobDescription);
+          const experienceResponse = await callLlmApiWithRetry(experiencePrompt);
+          const tailoredExperience = extractWorkExperienceContent(experienceResponse, experience);
+
+          if (tailoredExperience && updateWorkExperience(i, tailoredExperience)) {
+            successCount++;
+            setSectionProgress(prev => ({ ...prev, [`workExperience-${i}`]: 'success' }));
+          } else {
+            setSectionProgress(prev => ({ ...prev, [`workExperience-${i}`]: 'failed' }));
+          }
+        } catch (error) {
+          console.error(`Error tailoring work experience ${i + 1}:`, error);
+          setSectionProgress(prev => ({ ...prev, [`workExperience-${i}`]: 'failed' }));
+        }
+      }
+
+      setCurrentSection("projects");
+      setProgressStage(3);
+
+      for (let i = 0; i < baseResumeData.projects.length; i++) {
+        totalSections++;
+        const project = baseResumeData.projects[i];
+
+        setProgressMessage(`Tailoring project ${i + 1}/${baseResumeData.projects.length}...`);
+
+        try {
+          const projectPrompt = createSectionPrompt("projects", project, jobDescription);
+          const projectResponse = await callLlmApiWithRetry(projectPrompt);
+          const tailoredProject = extractProjectContent(projectResponse, project);
+
+          if (tailoredProject && updateProject(i, tailoredProject)) {
+            successCount++;
+            setSectionProgress(prev => ({ ...prev, [`project-${i}`]: 'success' }));
+          } else {
+            setSectionProgress(prev => ({ ...prev, [`project-${i}`]: 'failed' }));
+          }
+        } catch (error) {
+          console.error(`Error tailoring project ${i + 1}:`, error);
+          setSectionProgress(prev => ({ ...prev, [`project-${i}`]: 'failed' }));
+        }
+      }
+
+      setProgressStage(4);
+
+      totalSections++;
+      setCurrentSection("skills");
+      setProgressMessage("Optimizing skills...");
+
+      try {
+        const allSkills = baseResumeData.skills.flatMap(skill =>
+          Array.isArray(skill) ? skill : (skill.content || [])
+        );
+
+        const skillsPrompt = createSectionPrompt("skills", allSkills, jobDescription);
+        const skillsResponse = await callLlmApiWithRetry(skillsPrompt);
+        const tailoredSkills = extractListItems(skillsResponse, "Tailored skills");
+
+        if (tailoredSkills && tailoredSkills.length > 0) {
+          const newSkillsStructure = baseResumeData.skills.map(skillSection => {
+            if (Array.isArray(skillSection)) {
+              return tailoredSkills.slice(0, skillSection.length);
+            } else {
+              return {
+                ...skillSection,
+                content: tailoredSkills.slice(0, skillSection.content.length)
+              };
+            }
+          });
+
+          if (updateResumeSection("skills", newSkillsStructure)) {
+            successCount++;
+            setSectionProgress(prev => ({ ...prev, skills: 'success' }));
+          } else {
+            setSectionProgress(prev => ({ ...prev, skills: 'failed' }));
+          }
+        } else {
+          setSectionProgress(prev => ({ ...prev, skills: 'failed' }));
+        }
+      } catch (error) {
+        console.error("Error tailoring skills:", error);
+        setSectionProgress(prev => ({ ...prev, skills: 'failed' }));
+      }
+
+      totalSections++;
+      setCurrentSection("languages");
+      setProgressMessage("Optimizing languages...");
+
+      try {
+        const languagesPrompt = createSectionPrompt("languages", baseResumeData.languages, jobDescription);
+        const languagesResponse = await callLlmApiWithRetry(languagesPrompt);
+        const tailoredLanguages = extractListItems(languagesResponse, "Tailored languages");
+
+        if (tailoredLanguages && updateSkills("languages", tailoredLanguages)) {
+          successCount++;
+          setSectionProgress(prev => ({ ...prev, languages: 'success' }));
+        } else {
+          setSectionProgress(prev => ({ ...prev, languages: 'failed' }));
+        }
+      } catch (error) {
+        console.error("Error tailoring languages:", error);
+        setSectionProgress(prev => ({ ...prev, languages: 'failed' }));
+      }
+
+      totalSections++;
+      setCurrentSection("certifications");
+      setProgressMessage("Optimizing certifications...");
+
+      try {
+        const certificationsPrompt = createSectionPrompt("certifications", baseResumeData.certifications, jobDescription);
+        const certificationsResponse = await callLlmApiWithRetry(certificationsPrompt);
+        const tailoredCertifications = extractListItems(certificationsResponse, "Tailored certifications");
+
+        if (tailoredCertifications && updateSkills("certifications", tailoredCertifications)) {
+          successCount++;
+          setSectionProgress(prev => ({ ...prev, certifications: 'success' }));
+        } else {
+          setSectionProgress(prev => ({ ...prev, certifications: 'failed' }));
+        }
+      } catch (error) {
+        console.error("Error tailoring certifications:", error);
+        setSectionProgress(prev => ({ ...prev, certifications: 'failed' }));
+      }
+
+      setProgressMessage(`Tailoring complete! ${successCount}/${totalSections} sections updated successfully.`);
+
+      if (successCount < totalSections / 2) {
+        setError(`Warning: Only ${successCount} out of ${totalSections} sections were successfully tailored. Some sections may not reflect the job description optimally.`);
+      }
+
+    } catch (error) {
+      console.error("Section-by-section tailoring error:", error);
+      
+      if (error.type === 'API_KEY_ERROR') {
+        setError(`API Key Error: You need to set up your ${resumeData.llmConfig?.provider || 'LLM'} API key. 
+        
+        1. Create a .env file in the project root
+        2. Add your API key: ${resumeData.llmConfig?.provider === 'anthropic' ? 'ANTHROPIC_API_KEY=your_key_here' : 'OPENAI_API_KEY=your_key_here'}
+        3. Restart the application
+        
+        You can get an API key from ${resumeData.llmConfig?.provider === 'anthropic' ? 'https://console.anthropic.com/' : 'https://platform.openai.com/account/api-keys'}`);
+      } else if (error.message && error.message.includes('overloaded')) {
+        setError(`AI service is currently overloaded. Please try again in a few minutes.`);
+      } else if (error.message && error.message.includes('rate_limit')) {
+        setError(`Rate limit exceeded. Please try again in a few minutes.`);
+      } else {
+        setError(`Error during tailoring: ${error.message}`);
+      }
+    } finally {
+      setIsLoading(false);
+      setCurrentSection(null);
+      setProgressStage(0);
+    }
+  };
+
+  const refineResume = async () => {
+    const { instructionPrompt } = resumeData;
+    if (!instructionPrompt) {
+      setError("Please enter refinement instructions first.");
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    setProgressStage(1);
+    setRetryCount(0);
+    setJsonDiagnostics(null);
+    setProgressMessage("Processing refinement request...");
+
+    const baseResumeData = prepareResumeForLlm(resumeData);
+
+    try {
+      const prompt = `Please refine the following resume based on this instruction: "${instructionPrompt}"
+      
+      Resume data:
+      ${JSON.stringify(baseResumeData, null, 2)}
+      
+      Please provide ONLY the modified sections that need to change based on the instruction.
+      Format your response as plain text with clear section markers.`;
+
+      const response = await callLlmApiWithRetry(prompt);
+      
+      setProgressMessage("Extracting refinements...");
+      
+      setProgressMessage("Refinement complete!");
+    } catch (error) {
+      console.error("Error during refinement:", error);
+      
+      if (error.message && error.message.includes('overloaded')) {
+        setError(`AI service is currently overloaded. Please try again in a few minutes.`);
+      } else if (error.message && error.message.includes('rate_limit')) {
+        setError(`Rate limit exceeded. Please try again in a few minutes.`);
+      } else {
+        setError(`Refinement error: ${error.message}`);
+      }
+    } finally {
+      setIsLoading(false);
+      setProgressStage(0);
+    }
+  };
+
+  const tailorResume = () => {
+    tailorResumeBySection();
+  };
+
   return (
     <div className="flex-col-gap-2 mb-4 p-4 border border-dashed border-gray-300 rounded bg-fuchsia-700/30">
       <div className="flex justify-between items-center">
@@ -345,6 +578,40 @@ const JobDescriptionTailor = () => {
           </button>
         </div>
       </div>
+
+      {isLoading && progressStage > 0 && (
+        <div className="mt-2 p-3 bg-fuchsia-800/30 border border-fuchsia-700 rounded">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-white">Tailoring Progress</h3>
+            <span className="text-xs text-fuchsia-300">
+              {retryCount > 0 ? `Retry ${retryCount}` : `Phase ${progressStage}/4`}
+            </span>
+          </div>
+          <p className="text-sm text-white">{progressMessage}</p>
+          <div className="w-full bg-fuchsia-700/30 rounded-full h-2.5 mt-2">
+            <div 
+              className="bg-fuchsia-400 h-2.5 rounded-full transition-all duration-500"
+              style={{ width: `${(progressStage / 4) * 100}%` }}
+            ></div>
+          </div>
+          
+          {Object.keys(sectionProgress).length > 0 && (
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {Object.entries(sectionProgress).map(([section, status]) => (
+                <div 
+                  key={section} 
+                  className={`text-xs px-2 py-1 rounded flex items-center justify-between ${
+                    status === 'success' ? 'bg-green-900/30 text-green-300' : 'bg-red-900/30 text-red-300'
+                  }`}
+                >
+                  <span>{section.replace(/[-0-9]/g, ' ').trim()}</span>
+                  <span>{status === 'success' ? '✓' : '✗'}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {showSavedVersions && (
         <div className="mt-2 bg-fuchsia-800/50 rounded p-2">
@@ -402,14 +669,24 @@ const JobDescriptionTailor = () => {
       {showConfig && (
         <div className="flex-col-gap-2 p-3 bg-fuchsia-800/50 rounded mt-2">
           <h3 className="text-sm font-semibold text-white mb-1">LLM Configuration</h3>
+          
+          <div className="bg-yellow-800/30 p-2 rounded mb-3 text-xs text-yellow-200">
+            <p>⚠️ <strong>API Key Required</strong>: You need to set up your API key in the .env.local file.</p>
+            <ol className="list-decimal ml-4 mt-1">
+              <li>Create a .env.local file in the project root</li>
+              <li>Add your API key: <code>{resumeData.llmConfig?.provider === "openai" ? "OPENAI_API_KEY=sk-..." : "ANTHROPIC_API_KEY=sk-ant-..."}</code></li>
+              <li>Restart the application</li>
+            </ol>
+            <p className="mt-1">If you encounter API errors, check your API key and make sure it's correctly formatted. Most errors will be reported immediately instead of retrying.</p>
+          </div>
+          
           <label className="text-xs text-white block">Provider:</label>
           <select
             name="provider"
-            value={resumeData.llmConfig.provider}
+            value={(resumeData.llmConfig?.provider) || "anthropic"}
             onChange={handleLlmConfigChange}
             className="w-full other-input text-sm"
           >
-            <option value="simulate">Simulate (No API call)</option>
             <option value="anthropic">Anthropic Claude</option>
             <option value="openai">OpenAI GPT</option>
           </select>
@@ -418,8 +695,12 @@ const JobDescriptionTailor = () => {
           <input
             type="text"
             name="model"
-            placeholder={resumeData.llmConfig.provider === "anthropic" ? "claude-3-haiku-20240307" : "gpt-4o"}
-            value={resumeData.llmConfig.model || ""}
+            placeholder={
+              (resumeData.llmConfig?.provider === "openai") 
+                ? "gpt-3.5-turbo" 
+                : "claude-3-haiku-20240307"
+            }
+            value={resumeData.llmConfig?.model || ""}
             onChange={handleLlmConfigChange}
             className="w-full other-input text-sm"
           />
@@ -431,7 +712,7 @@ const JobDescriptionTailor = () => {
                 type="number"
                 name="max_tokens"
                 placeholder="1024"
-                value={resumeData.llmConfig.max_tokens || ""}
+                value={resumeData.llmConfig?.max_tokens || ""}
                 onChange={handleLlmConfigChange}
                 className="w-full other-input text-sm"
               />
@@ -445,7 +726,7 @@ const JobDescriptionTailor = () => {
                 min="0"
                 max="1"
                 placeholder="0.5"
-                value={resumeData.llmConfig.temperature || ""}
+                value={resumeData.llmConfig?.temperature || ""}
                 onChange={handleLlmConfigChange}
                 className="w-full other-input text-sm"
               />
@@ -456,7 +737,7 @@ const JobDescriptionTailor = () => {
           <input
             type="text"
             name="apiUrl"
-            value={resumeData.llmConfig.apiUrl}
+            value={resumeData.llmConfig?.apiUrl || ""}
             onChange={handleLlmConfigChange}
             className="w-full other-input text-sm"
             placeholder="/api/llm"
@@ -481,7 +762,7 @@ const JobDescriptionTailor = () => {
             : "bg-fuchsia-700 hover:bg-fuchsia-800"
         }`}
       >
-        {isLoading ? "Tailoring..." : "Tailor Resume to Job Description"}
+        {isLoading ? `Tailoring... (${progressStage > 0 ? `Phase ${progressStage}/4` : 'Processing'})` : "Tailor Resume to Job Description"}
       </button>
 
       <textarea
@@ -504,7 +785,45 @@ const JobDescriptionTailor = () => {
         {isLoading ? "Refining..." : "Refine Resume"}
       </button>
 
-      {error && <p className="text-red-300 text-sm mt-2">{error}</p>}
+      {error && (
+        <div className="mt-4 p-4 border border-red-300 bg-red-50 rounded-md">
+          <h3 className="font-bold text-red-700">Error</h3>
+          <p className="whitespace-pre-line">{error}</p>
+          
+          {jsonDiagnostics && (
+            <div className="mt-2">
+              <details className="mt-2">
+                <summary className="text-sm font-medium text-red-800 cursor-pointer">
+                  Show diagnostic information
+                </summary>
+                <div className="mt-2 p-2 bg-white rounded border border-red-200 text-xs overflow-auto">
+                  <h4 className="font-bold">Raw Response (first 1000 chars):</h4>
+                  <pre className="mt-1 p-2 bg-gray-100 rounded overflow-auto max-h-40">
+                    {jsonDiagnostics.rawResponse}
+                  </pre>
+                  
+                  <h4 className="font-bold mt-3">Parse Attempts:</h4>
+                  <ul className="list-disc pl-5">
+                    {jsonDiagnostics.attempts.map((attempt, i) => (
+                      <li key={i} className={attempt.success ? "text-green-600" : "text-red-600"}>
+                        <strong>{attempt.method}:</strong> {attempt.success ? 'Success' : attempt.error}
+                        {attempt.attemptedJson && !attempt.success && (
+                          <details>
+                            <summary className="cursor-pointer">Attempted JSON</summary>
+                            <pre className="mt-1 p-1 bg-gray-100 rounded overflow-auto max-h-24 text-xs">
+                              {attempt.attemptedJson}
+                            </pre>
+                          </details>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </details>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

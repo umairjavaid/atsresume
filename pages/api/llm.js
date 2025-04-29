@@ -24,10 +24,8 @@ export default async function handler(req) {
         response = await callOpenAI(model, system, messages, max_tokens, temperature);
         break;
       default:
-        return new Response(
-          JSON.stringify({ message: 'Unsupported provider' }),
-          { status: 400, headers: { 'Content-Type': 'application/json' } }
-        );
+        // Default to OpenAI if provider not specified
+        response = await callOpenAI(model, system, messages, max_tokens, temperature);
     }
     
     return new Response(
@@ -36,60 +34,87 @@ export default async function handler(req) {
     );
   } catch (error) {
     console.error('LLM API Error:', error);
+    
+    // Specific error handling for Anthropic overloaded errors
+    const errorMessage = error.message || 'Failed to process request';
+    const statusCode = error.status || 500;
+    const errorType = 
+      errorMessage.includes('overloaded_error') ? 'SERVICE_OVERLOADED' :
+      errorMessage.includes('rate_limit') ? 'RATE_LIMITED' : 
+      'API_ERROR';
+    
     return new Response(
-      JSON.stringify({ message: error.message || 'Failed to process request' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
+      JSON.stringify({ 
+        message: errorMessage,
+        details: error.stack ? error.stack.split('\n').slice(0, 3).join('\n') : 'No stack trace available',
+        name: error.name,
+        type: errorType
+      }),
+      { status: statusCode, headers: { 'Content-Type': 'application/json' } }
     );
   }
 }
 
 async function callAnthropic(model, system, messages, max_tokens, temperature) {
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-  const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
   
   if (!ANTHROPIC_API_KEY) {
-    throw new Error("Anthropic API key is not configured");
+    throw new Error('Anthropic API key not configured');
   }
   
-  console.log("Calling Anthropic API with model:", model);
-  
-  // Prepare the messages array in Anthropic's format
+  // Convert our message format to Anthropic format, excluding system messages
   const anthropicMessages = messages.map(msg => ({
-    role: msg.role === 'user' ? 'user' : 'assistant',
+    role: msg.role,
     content: msg.content
-  }));
+  })).filter(msg => msg.role !== 'system');
   
+  // System message should be passed as a top-level parameter, not in the messages array
   try {
-    const response = await fetch(ANTHROPIC_API_URL, {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
+        'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: model || 'claude-3-opus-20240229',
-        system: system,
+        model: model || 'claude-3-haiku-20240307',
         messages: anthropicMessages,
-        max_tokens: max_tokens || 4000,
-        temperature: temperature || 0.7
-      })
+        system: system, // Pass system as a top-level parameter
+        max_tokens: max_tokens || 1024,
+        temperature: temperature || 0.5,
+      }),
     });
+
+    // Get the response body as text first to log the raw response if there's an error
+    const responseText = await response.text();
     
     if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-      console.error("Anthropic API error:", response.status, errorData);
-      throw new Error(`Anthropic API error: ${response.status} ${errorData ? JSON.stringify(errorData) : response.statusText}`);
+      // Parse error details if possible
+      let errorData;
+      try {
+        errorData = JSON.parse(responseText);
+      } catch (e) {
+        errorData = { raw: responseText };
+      }
+      
+      const error = new Error(`Anthropic API error: ${response.status} ${JSON.stringify(errorData)}`);
+      error.status = response.status;
+      error.data = errorData;
+      throw error;
     }
     
-    const data = await response.json();
+    // Parse the successful response text as JSON
+    const data = JSON.parse(responseText);
+    
     return {
-      content: data.content[0].text,
+      id: data.id,
       model: data.model,
-      usage: data.usage
+      content: data.content[0].text,
+      _raw: data // Include the raw response for debugging
     };
   } catch (error) {
-    console.error("Error calling Anthropic:", error.message);
+    console.error("Error calling Anthropic:", error);
     throw error;
   }
 }
@@ -110,35 +135,54 @@ async function callOpenAI(model, system, messages, max_tokens, temperature) {
     }))
   ];
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: model || 'gpt-4o',
-      messages: openAIMessages,
-      max_tokens: max_tokens || 1024,
-      temperature: temperature || 0.5,
-    }),
-  });
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: model || 'gpt-4o',
+        messages: openAIMessages,
+        max_tokens: max_tokens || 1024,
+        temperature: temperature || 0.5,
+      }),
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`OpenAI API error: ${response.status} ${errorText}`);
-  }
+    // Get the response body as text first to log the raw response if there's an error
+    const responseText = await response.text();
 
-  const data = await response.json();
-  
-  // Convert OpenAI response format to match Anthropic format for consistency
-  return {
-    id: data.id,
-    content: [
-      {
-        type: 'text',
-        text: data.choices[0].message.content
+    if (!response.ok) {
+      try {
+        // Try to parse as JSON for structured error info
+        const errorData = JSON.parse(responseText);
+        console.error("OpenAI API error:", response.status, errorData);
+        const error = new Error(`OpenAI API error: ${response.status} ${JSON.stringify(errorData)}`);
+        error.status = response.status;
+        error.data = errorData;
+        throw error;
+      } catch (parseError) {
+        // If parsing fails, use the raw text
+        console.error("OpenAI API error (non-JSON):", response.status, responseText);
+        const error = new Error(`OpenAI API error: ${response.status} ${responseText.substring(0, 200)}`);
+        error.status = response.status;
+        throw error;
       }
-    ]
-  };
+    }
+
+    // Parse the successful response text as JSON
+    const data = JSON.parse(responseText);
+
+    // Convert OpenAI response format to match Anthropic format for consistency
+    return {
+      id: data.id,
+      model: data.model,
+      content: data.choices[0].message.content,
+      _raw: data // Include the raw response for debugging
+    };
+  } catch (error) {
+    console.error("Error calling OpenAI:", error);
+    throw error;
+  }
 }
