@@ -306,7 +306,69 @@ const JobDescriptionTailor = () => {
 
   const extractSummaryContent = (response) => {
     if (!response) return null;
-    return response.trim();
+    
+    // Check if response appears to be JSON or contains a JSON code block
+    if (response.includes('```json') || response.includes('```') || 
+        response.includes('{') && response.includes('}')) {
+      try {
+        // First try to extract JSON from code block
+        let jsonContent = response;
+        
+        // Remove markdown code block formatting if present
+        if (response.includes('```')) {
+          const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (jsonMatch && jsonMatch[1]) {
+            jsonContent = jsonMatch[1].trim();
+          }
+        }
+        
+        // Try to parse as JSON
+        let parsedResponse;
+        try {
+          parsedResponse = JSON.parse(jsonContent);
+        } catch (e) {
+          // If strict JSON parsing fails, try more lenient parsing for malformed JSON
+          try {
+            // Fix common JSON issues like unquoted keys and single quotes
+            const fixedJson = jsonContent
+              .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":') // Ensure keys are properly quoted
+              .replace(/'/g, '"'); // Replace single quotes with double quotes
+            parsedResponse = JSON.parse(fixedJson);
+          } catch (e2) {
+            // If all JSON parsing fails, extract content using regex
+            const summaryMatch = response.match(/"summary"\s*:\s*"([^"]*)"/);
+            if (summaryMatch && summaryMatch[1]) {
+              return summaryMatch[1].trim();
+            }
+          }
+        }
+        
+        // Extract summary from parsed JSON if available
+        if (parsedResponse && typeof parsedResponse === 'object') {
+          if (parsedResponse.summary) {
+            return parsedResponse.summary;
+          }
+          
+          // If there's no summary key but there's only one key with a string value, use that
+          const values = Object.values(parsedResponse);
+          if (values.length === 1 && typeof values[0] === 'string') {
+            return values[0];
+          }
+        }
+      } catch (error) {
+        console.error("Error parsing summary JSON:", error);
+      }
+    }
+    
+    // Fall back to returning the plain text response with some cleaning
+    return response
+      .replace(/^Summary:\s*/i, '')
+      .replace(/```json/g, '')
+      .replace(/```/g, '')
+      .replace(/\{|\}/g, '')
+      .replace(/"summary"\s*:\s*/g, '')
+      .replace(/^["']|["']$/g, '')
+      .trim();
   };
   
   const extractWorkExperienceContent = (response, originalExperience) => {
@@ -584,9 +646,87 @@ const JobDescriptionTailor = () => {
       try {
         const certificationsPrompt = createSectionPrompt("certifications", baseResumeData.certifications, jobDescription);
         const certificationsResponse = await callLlmApiWithRetry(certificationsPrompt);
-        const tailoredCertifications = extractListItems(certificationsResponse, "Tailored certifications");
+        const tailoredCertifications = certificationsResponse;
 
-        if (tailoredCertifications && updateSkills("certifications", tailoredCertifications)) {
+        // Fix for JSON output in certifications
+        let processedCertifications = tailoredCertifications;
+
+        // Check if the result is a JSON string and parse it
+        if (typeof tailoredCertifications === 'string' && (
+            tailoredCertifications.startsWith('{') || 
+            tailoredCertifications.startsWith('[') ||
+            tailoredCertifications.includes('json')
+          )) {
+          try {
+            // Extract actual certification items
+            const extractedCerts = [];
+            
+            // Try to parse if it's valid JSON
+            let jsonData = null;
+            try {
+              // Remove "```json" and "```" wrapping if present
+              const jsonContent = tailoredCertifications
+                .replace(/```json\s*/g, '')
+                .replace(/```\s*$/g, '')
+                .trim();
+                
+              jsonData = JSON.parse(jsonContent);
+            } catch (e) {
+              // If parsing fails, use regex to extract potential certification items
+              const certRegex = /"([^"]+)"/g;
+              let match;
+              while ((match = certRegex.exec(tailoredCertifications)) !== null) {
+                if (match[1].length > 5 && !match[1].includes(':')) {
+                  extractedCerts.push(match[1]);
+                }
+              }
+            }
+            
+            // If we successfully parsed JSON, extract relevant certification info
+            if (jsonData) {
+              // Handle various JSON structures that might contain certification info
+              if (Array.isArray(jsonData)) {
+                extractedCerts.push(...jsonData.map(item => 
+                  typeof item === 'string' ? item : (item.name || item.title || item.certification || '')
+                ).filter(Boolean));
+              } else {
+                // Look for certification-related keys in the JSON object
+                const certKeys = ['certifications', 'certification', 'credentials', 'qualifications'];
+                for (const key of certKeys) {
+                  if (jsonData[key] && Array.isArray(jsonData[key])) {
+                    extractedCerts.push(...jsonData[key]);
+                    break;
+                  }
+                }
+                
+                // If no certifications found in known keys, extract string values as potential certs
+                if (extractedCerts.length === 0) {
+                  Object.values(jsonData).forEach(value => {
+                    if (typeof value === 'string' && value.length > 3) {
+                      extractedCerts.push(value);
+                    }
+                  });
+                }
+              }
+            }
+            
+            // Use extracted certifications if we found any
+            if (extractedCerts.length > 0) {
+              processedCertifications = extractedCerts.filter(cert => 
+                cert && typeof cert === 'string' && cert.length > 3
+              );
+            }
+          } catch (jsonError) {
+            console.error("Error processing certification JSON:", jsonError);
+          }
+        }
+        
+        // Ensure we have an array of strings
+        if (!Array.isArray(processedCertifications)) {
+          processedCertifications = resumeData.certifications;
+        }
+        
+        if (processedCertifications && updateSkills("certifications", processedCertifications)) {
           successCount++;
           setSectionProgress(prev => ({ ...prev, certifications: 'success' }));
         } else {
