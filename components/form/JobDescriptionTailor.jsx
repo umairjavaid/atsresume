@@ -277,6 +277,132 @@ const JobDescriptionTailor = () => {
     }
   };
 
+  const createSectionPrompt = (sectionType, sectionContent, jobDescription) => {
+    const basePrompt = `Given the following job description:\n\n${jobDescription}\n\n`;
+    
+    switch(sectionType) {
+      case "summary":
+        return `${basePrompt}Please tailor this professional summary to highlight skills and qualifications relevant to the job description:\n\n${sectionContent}\n\nProvide only the refined summary text.`;
+      
+      case "workExperience":
+        return `${basePrompt}Please tailor this work experience to highlight achievements and responsibilities relevant to the job description:\n\nCompany: ${sectionContent.company}\nPosition: ${sectionContent.position}\nDescription: ${sectionContent.description || ''}\nKey Achievements: ${sectionContent.keyAchievements || ''}\n\nProvide the tailored description and key achievements, keeping the same format. Maintain bullet points for key achievements.`;
+      
+      case "projects":
+        return `${basePrompt}Please tailor this project description to highlight skills and accomplishments relevant to the job description:\n\nProject: ${sectionContent.name}\nDescription: ${sectionContent.description || ''}\nKey Achievements: ${sectionContent.keyAchievements || ''}\n\nProvide the tailored description and key achievements, keeping the same format. Maintain bullet points for key achievements.`;
+      
+      case "skills":
+        return `${basePrompt}Given these skills:\n\n${sectionContent.join(", ")}\n\nPlease provide a refined list of skills that match the job description requirements. Only include skills from the original list that are relevant to the job. Return as a comma-separated list of skills.`;
+      
+      case "languages":
+        return `${basePrompt}Given these languages:\n\n${sectionContent.join(", ")}\n\nPlease order these languages based on relevance to the job description. Return as a comma-separated list of languages, without adding new ones.`;
+      
+      case "certifications":
+        return `${basePrompt}Given these certifications:\n\n${sectionContent.join(", ")}\n\nPlease order these certifications based on relevance to the job description. Return as a comma-separated list of certifications, without adding new ones.`;
+      
+      default:
+        return `${basePrompt}Please tailor the following content to match the job description:\n\n${JSON.stringify(sectionContent, null, 2)}\n\nProvide only the refined content.`;
+    }
+  };
+
+  const extractSummaryContent = (response) => {
+    if (!response) return null;
+    return response.trim();
+  };
+  
+  const extractWorkExperienceContent = (response, originalExperience) => {
+    if (!response) return null;
+    const tailoredExperience = { ...originalExperience };
+    const descriptionMatch = response.match(/Description:(.*?)(?=Key Achievements:|$)/s);
+    const keyAchievementsMatch = response.match(/Key Achievements:(.*?)$/s);
+    if (descriptionMatch && descriptionMatch[1]) {
+      tailoredExperience.description = descriptionMatch[1].trim();
+    }
+    if (keyAchievementsMatch && keyAchievementsMatch[1]) {
+      tailoredExperience.keyAchievements = keyAchievementsMatch[1].trim();
+    }
+    return tailoredExperience;
+  };
+  
+  const extractProjectContent = (response, originalProject) => {
+    if (!response) return null;
+    const tailoredProject = { ...originalProject };
+    const descriptionMatch = response.match(/Description:(.*?)(?=Key Achievements:|$)/s);
+    const keyAchievementsMatch = response.match(/Key Achievements:(.*?)$/s);
+    if (descriptionMatch && descriptionMatch[1]) {
+      tailoredProject.description = descriptionMatch[1].trim();
+    }
+    if (keyAchievementsMatch && keyAchievementsMatch[1]) {
+      tailoredProject.keyAchievements = keyAchievementsMatch[1].trim();
+    }
+    return tailoredProject;
+  };
+  
+  const extractListItems = (response, label) => {
+    if (!response) return null;
+    const items = response.split(',').map(item => item.trim()).filter(item => item);
+    return items.length > 0 ? items : null;
+  };
+
+  const updateWorkExperience = (index, tailoredExperience) => {
+    try {
+      setResumeData(prevData => {
+        const updatedWorkExperience = [...prevData.workExperience];
+        updatedWorkExperience[index] = {
+          ...updatedWorkExperience[index],
+          ...tailoredExperience
+        };
+        return { ...prevData, workExperience: updatedWorkExperience };
+      });
+      return true;
+    } catch (error) {
+      console.error("Error updating work experience:", error);
+      return false;
+    }
+  };
+
+  const updateProject = (index, tailoredProject) => {
+    try {
+      setResumeData(prevData => {
+        const updatedProjects = [...prevData.projects];
+        updatedProjects[index] = {
+          ...updatedProjects[index],
+          ...tailoredProject
+        };
+        return { ...prevData, projects: updatedProjects };
+      });
+      return true;
+    } catch (error) {
+      console.error("Error updating project:", error);
+      return false;
+    }
+  };
+
+  const updateResumeSection = (sectionName, content) => {
+    try {
+      setResumeData(prevData => ({
+        ...prevData,
+        [sectionName]: content
+      }));
+      return true;
+    } catch (error) {
+      console.error(`Error updating ${sectionName}:`, error);
+      return false;
+    }
+  };
+
+  const updateSkills = (skillsType, content) => {
+    try {
+      setResumeData(prevData => ({
+        ...prevData,
+        [skillsType]: content
+      }));
+      return true;
+    } catch (error) {
+      console.error(`Error updating ${skillsType}:`, error);
+      return false;
+    }
+  };
+
   const tailorResumeBySection = async () => {
     setIsLoading(true);
     setError(null);
@@ -398,7 +524,7 @@ const JobDescriptionTailor = () => {
 
       try {
         const allSkills = baseResumeData.skills.flatMap(skill =>
-          Array.isArray(skill) ? skill : (skill.content || [])
+          Array.isArray(skill) ? skill : (skill.skills || [])
         );
 
         const skillsPrompt = createSectionPrompt("skills", allSkills, jobDescription);
@@ -412,7 +538,7 @@ const JobDescriptionTailor = () => {
             } else {
               return {
                 ...skillSection,
-                content: tailoredSkills.slice(0, skillSection.content.length)
+                skills: tailoredSkills.slice(0, skillSection.skills ? skillSection.skills.length : 0)
               };
             }
           });
