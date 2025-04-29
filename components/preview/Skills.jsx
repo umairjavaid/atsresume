@@ -1,7 +1,13 @@
 import React from "react";
+import { sanitizeJSONString } from "../../utils/resumeUtils";
 
 const Skills = ({ title, skills }) => {
-  const filteredSkills = skills.filter(skill => skill && skill.trim() !== '');
+  // Sanitize each skill in the array
+  const sanitizedSkills = skills.map(skill => 
+    typeof skill === 'string' ? sanitizeJSONString(skill) : skill
+  );
+  
+  const filteredSkills = sanitizedSkills.filter(skill => skill && skill.trim() !== '');
 
   return (
     filteredSkills.length > 0 && (

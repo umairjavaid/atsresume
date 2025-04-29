@@ -30,6 +30,7 @@ import Language from "./Language";
 import Certification from "./Certification";
 import { HighlightMenu } from "react-highlight-menu";
 import useKeyboardShortcut from "../../hooks/useKeyboardShortcut";
+import { sanitizeJSONString } from "../../utils/resumeUtils";
 
 const DragDropContext = dynamic(
   () =>
@@ -346,7 +347,7 @@ const Preview = () => {
                 <h2 className="section-title mb-1 border-b-2 border-gray-300">
                   Summary
                 </h2>
-                <p className="content break-words">{resumeData.summary}</p>
+                <p className="content break-words">{sanitizeJSONString(resumeData.summary)}</p>
               </div>
             )}
             {resumeData.workExperience.length > 0 && (
@@ -383,7 +384,7 @@ const Preview = () => {
                             <p className="content mb-0.5">{item.position}</p>
                             {item.description && (
                               <p className="content hyphens-auto mb-1">
-                                {item.description}
+                                {sanitizeJSONString(item.description)}
                               </p>
                             )}
                             {item.keyAchievements && (
@@ -424,7 +425,7 @@ const Preview = () => {
                                               >
                                                 <div
                                                   dangerouslySetInnerHTML={{
-                                                    __html: achievement,
+                                                    __html: sanitizeJSONString(achievement),
                                                   }}
                                                   contentEditable
                                                   suppressContentEditableWarning
@@ -502,7 +503,7 @@ const Preview = () => {
                             )}
                             {item.description && (
                               <p className="content hyphens-auto mb-1">
-                                {item.description}
+                                {sanitizeJSONString(item.description)}
                               </p>
                             )}
                             {item.keyAchievements && (
@@ -543,7 +544,7 @@ const Preview = () => {
                                               >
                                                 <div
                                                   dangerouslySetInnerHTML={{
-                                                    __html: achievement,
+                                                    __html: sanitizeJSONString(achievement),
                                                   }}
                                                   contentEditable
                                                   suppressContentEditableWarning

@@ -96,3 +96,40 @@ export const hasChanges = (original, updated) => {
     return updated[key] !== original[key];
   });
 };
+
+/**
+ * Detects if a string contains JSON and extracts the content safely
+ * @param {string} text - Input text that might contain JSON
+ * @returns {string} Sanitized text with parsed JSON if detected
+ */
+export const sanitizeJSONString = (text) => {
+  if (!text || typeof text !== 'string') return text;
+  
+  // Check if the text looks like a JSON string (starts and ends with {} or [])
+  const trimmed = text.trim();
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || 
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try {
+      // Try to parse it
+      const parsed = JSON.parse(trimmed);
+      
+      // Handle different types of parsed results
+      if (typeof parsed === 'string') {
+        return parsed;
+      } else if (Array.isArray(parsed)) {
+        return parsed.join(", ");
+      } else if (typeof parsed === 'object') {
+        // Extract meaningful content from the object
+        return Object.values(parsed).filter(v => typeof v === 'string').join(", ");
+      }
+      
+      // Fallback to original if we can't handle the parsed result
+      return text;
+    } catch (e) {
+      // If it's not valid JSON, return the original text
+      return text;
+    }
+  }
+  
+  return text;
+};
