@@ -1,7 +1,9 @@
+// DEPRECATED: This API route is in simulation mode and no longer used. Please use /api/llm.
 import { NextResponse } from 'next/server';
 
 // Next.js API route support: https://nextjs.org/docs/api-routes/introduction
 
+/*
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -30,12 +32,13 @@ export default async function handler(req, res) {
     }
 
     // Actual LLM API calls would go here
-    */
+    * /
   } catch (error) {
     console.error('LLM proxy error:', error);
     return res.status(500).json({ error: error.message || 'Internal server error' });
   }
 }
+*/
 
 async function callOpenAI(apiKey, systemPrompt, userPrompt) {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {

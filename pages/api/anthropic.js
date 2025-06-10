@@ -1,7 +1,9 @@
+// DEPRECATED: This API route is a direct Anthropic proxy. /api/llm provides a more generic interface. Please use /api/llm.
 // Ensure you have your Anthropic API key stored securely in environment variables
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
+/*
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
@@ -55,3 +57,4 @@ export default async function handler(req, res) {
     return res.status(500).json({ message: error.message || "Failed to process request" });
   }
 }
+*/

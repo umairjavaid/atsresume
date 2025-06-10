@@ -345,37 +345,70 @@ const JobDescriptionTailor = () => {
       }
       
       if (parsedData) {
-        for (const key of keyNames) {
-          if (parsedData[key] !== undefined) {
-            const value = parsedData[key];
-            if (Array.isArray(value)) {
-              return value.map(item => 
-                typeof item === 'string' ? item : JSON.stringify(item)
-              );
+        // If keyNames is an array, attempt to extract multiple keys
+        if (Array.isArray(keyNames)) {
+          const result = {};
+          let foundKey = false;
+          for (const key of keyNames) {
+            if (parsedData[key] !== undefined) {
+              result[key] = parsedData[key];
+              foundKey = true;
             }
-            return value;
           }
+          if (foundKey) {
+            // If multiple keys were requested, return the object
+            // If only one key was in keyNames array and found, this still returns an object: e.g. {description: "..."}
+            return result;
+          }
+        } else if (keyNames && parsedData[keyNames] !== undefined) {
+          // Original logic for single keyName string
+          const value = parsedData[keyNames];
+          if (Array.isArray(value)) {
+            return value.map(item =>
+              typeof item === 'string' ? item : JSON.stringify(item)
+            );
+          }
+          return value;
         }
         
-        const values = Object.values(parsedData);
-        if (values.length === 1) {
-          const value = values[0];
-          if (typeof value === 'string') {
-            return value;
-          } else if (Array.isArray(value)) {
-            return value;
-          }
+        // Fallback for when specific keys aren't found or if keyNames wasn't an array initially
+        // This part tries to be smart if only one key was expected (not an array)
+        // or if the multi-key extraction above didn't find anything.
+        if (!Array.isArray(keyNames)) {
+            // Try to find the single keyName if it wasn't an array
+            if (parsedData[keyNames] !== undefined) return parsedData[keyNames];
+
+            // Fallback to original behavior if the single keyName is not present
+            // or if keyNames was not an array and not found.
+            const values = Object.values(parsedData);
+            if (values.length === 1) {
+                const value = values[0];
+                if (typeof value === 'string' || Array.isArray(value)) {
+                    return value;
+                }
+            }
         }
+        // If keyNames was an array but nothing was found, this will lead to fallback string.
+        // Or if it was a single key string not found.
       }
     } catch (error) {
-      console.error(`Error extracting data with keys ${keyNames}:`, error);
+      console.error(`Error extracting data for keys "${keyNames}":`, error);
+      // Log the response for debugging if parsing fails
+      console.debug("Response causing parsing error:", response);
     }
     
+    // Fallback: return the raw response (cleaned up) if JSON parsing or key extraction fails
+    // This part should ideally be hit less often if LLM follows instructions.
+    console.warn(`Falling back to string extraction for keys "${keyNames}". Response:`, response.substring(0, 200));
+    // Ensure keyNames is an array for the join operation, even if a single string was passed.
+    const keysForRegex = Array.isArray(keyNames) ? keyNames : [keyNames].filter(Boolean);
+    if (keysForRegex.length === 0) return response.trim(); // Nothing to sensibly strip if no keynames
+
     return response
       .replace(/```json/g, '')
       .replace(/```/g, '')
       .replace(/\{|\}/g, '')
-      .replace(new RegExp(`"(?:${keyNames.join('|')})"\\s*:\\s*`, 'g'), '')
+      .replace(new RegExp(`"(?:${keysForRegex.join('|')})"\\s*:\\s*`, 'g'), '')
       .replace(/^["']|["']$/g, '')
       .trim();
   };
@@ -597,12 +630,19 @@ const JobDescriptionTailor = () => {
         try {
           const experiencePrompt = createSectionPrompt("workExperience", experience, jobDescription);
           const experienceResponse = await callLlmApiWithRetry(experiencePrompt);
-          const tailoredExperience = extractFromJson(experienceResponse, ["description", "keyAchievements"]);
+          // Requesting an object with description and keyAchievements
+          const tailoredExperienceData = extractFromJson(experienceResponse, ["description", "keyAchievements"]);
 
-          if (tailoredExperience && updateWorkExperience(i, tailoredExperience)) {
-            successCount++;
-            setSectionProgress(prev => ({ ...prev, [`workExperience-${i}`]: 'success' }));
+          if (tailoredExperienceData && typeof tailoredExperienceData === 'object' && !Array.isArray(tailoredExperienceData) && Object.keys(tailoredExperienceData).length > 0) {
+            if (updateWorkExperience(i, tailoredExperienceData)) {
+              successCount++;
+              setSectionProgress(prev => ({ ...prev, [`workExperience-${i}`]: 'success' }));
+            } else {
+              console.error(`Failed to update work experience ${i + 1} even with valid data.`);
+              setSectionProgress(prev => ({ ...prev, [`workExperience-${i}`]: 'failed' }));
+            }
           } else {
+            console.warn(`Tailoring work experience ${i + 1} did not return a valid object. Received:`, tailoredExperienceData);
             setSectionProgress(prev => ({ ...prev, [`workExperience-${i}`]: 'failed' }));
           }
         } catch (error) {
@@ -623,12 +663,19 @@ const JobDescriptionTailor = () => {
         try {
           const projectPrompt = createSectionPrompt("projects", project, jobDescription);
           const projectResponse = await callLlmApiWithRetry(projectPrompt);
-          const tailoredProject = extractFromJson(projectResponse, ["description", "keyAchievements"]);
+          // Requesting an object with name, description, and keyAchievements
+          const tailoredProjectData = extractFromJson(projectResponse, ["name", "description", "keyAchievements"]);
 
-          if (tailoredProject && updateProject(i, tailoredProject)) {
-            successCount++;
-            setSectionProgress(prev => ({ ...prev, [`project-${i}`]: 'success' }));
+          if (tailoredProjectData && typeof tailoredProjectData === 'object' && !Array.isArray(tailoredProjectData) && Object.keys(tailoredProjectData).length > 0) {
+            if (updateProject(i, tailoredProjectData)) {
+              successCount++;
+              setSectionProgress(prev => ({ ...prev, [`project-${i}`]: 'success' }));
+            } else {
+              console.error(`Failed to update project ${i + 1} even with valid data.`);
+              setSectionProgress(prev => ({ ...prev, [`project-${i}`]: 'failed' }));
+            }
           } else {
+            console.warn(`Tailoring project ${i + 1} did not return a valid object. Received:`, tailoredProjectData);
             setSectionProgress(prev => ({ ...prev, [`project-${i}`]: 'failed' }));
           }
         } catch (error) {

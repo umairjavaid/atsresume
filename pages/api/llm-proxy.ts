@@ -1,5 +1,7 @@
+// DEPRECATED: This API route was an alternative proxy and is no longer used. Please use /api/llm.
 import type { NextApiRequest, NextApiResponse } from 'next'
 
+/*
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -69,3 +71,4 @@ export default async function handler(
     return res.status(500).json({ error: "Failed to call external LLM API.", details: errorMessage });
   }
 }
+*/
