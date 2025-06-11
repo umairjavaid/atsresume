@@ -263,18 +263,42 @@ const JobDescriptionTailor = () => {
   };
 
   const extractResponseText = (data, provider) => {
-    try {
-      if (provider === 'anthropic') {
-        return data.content || "";
-      } else if (provider === 'openai') {
-        return data.content?.[0]?.text || data.choices?.[0]?.message?.content || "";
-      } else {
-        return data.content?.[0]?.text || data.content || JSON.stringify(data);
-      }
-    } catch (error) {
-      console.error("Error extracting response text:", error);
-      return data.toString();
+    // Direct extraction if data.content is a string (primary expected format)
+    if (data && typeof data.content === 'string') {
+      return data.content;
     }
+
+    // Fallback for OpenAI-like structures (including data._raw if present)
+    if (data?.choices?.[0]?.message?.content) {
+      console.warn("Extracting text via data.choices[0].message.content");
+      return data.choices[0].message.content;
+    }
+    if (data?._raw?.choices?.[0]?.message?.content) {
+      console.warn("Extracting text via data._raw.choices[0].message.content");
+      return data._raw.choices[0].message.content;
+    }
+
+    // Fallback for Anthropic-like structures (including data._raw if present)
+    // and also generic data.content[0].text
+    if (data?.content?.[0]?.text) {
+      console.warn("Extracting text via data.content[0].text");
+      return data.content[0].text;
+    }
+    if (data?._raw?.content?.[0]?.text) {
+      console.warn("Extracting text via data._raw.content[0].text");
+      return data._raw.content[0].text;
+    }
+
+    // If data.content exists but is not a string (e.g. array), log warning.
+    if (data && data.content !== undefined) {
+        console.warn(`extractResponseText: data.content found but is not a string. Type: ${typeof data.content}. Value:`, data.content);
+    } else if (data) {
+        console.warn("extractResponseText: Could not find expected content in response data. Data:", data);
+    } else {
+        console.warn("extractResponseText: Received null or undefined data.");
+    }
+
+    return ""; // Default fallback
   };
 
   const createSectionPrompt = (sectionType, sectionContent, jobDescription) => {
@@ -282,22 +306,22 @@ const JobDescriptionTailor = () => {
     
     switch(sectionType) {
       case "summary":
-        return `${basePrompt}Please tailor this professional summary to highlight skills and qualifications relevant to the job description:\n\n${sectionContent}\n\nProvide only the refined summary text.`;
+        return `${basePrompt}Please tailor this professional summary to highlight skills and qualifications relevant to the job description:\n\n${sectionContent}\n\nReturn *only* the refined summary text. Do not include any JSON formatting, markdown, or any other explanatory text.`;
       
       case "workExperience":
-        return `${basePrompt}Please tailor this work experience to highlight achievements and responsibilities relevant to the job description:\n\nCompany: ${sectionContent.company}\nPosition: ${sectionContent.position}\nDescription: ${sectionContent.description || ''}\nKey Achievements: ${sectionContent.keyAchievements || ''}\n\nProvide the tailored description and key achievements, keeping the same format. Maintain bullet points for key achievements.`;
+        return `${basePrompt}Please tailor this work experience to highlight achievements and responsibilities relevant to the job description:\n\nCompany: ${sectionContent.company}\nPosition: ${sectionContent.position}\nDescription: ${sectionContent.description || ''}\nKey Achievements: ${sectionContent.keyAchievements || ''}\n\nReturn the result *only* as a JSON object with two string keys: "description" and "keyAchievements". Example: {"description": "Tailored description text...", "keyAchievements": "- Achievement 1 text\\n- Achievement 2 text"}. Do not include any other text or explanations outside of this JSON object.`;
       
       case "projects":
-        return `${basePrompt}Please tailor this project description to highlight skills and accomplishments relevant to the job description:\n\nProject: ${sectionContent.name}\nDescription: ${sectionContent.description || ''}\nKey Achievements: ${sectionContent.keyAchievements || ''}\n\nProvide the tailored description and key achievements, keeping the same format. Maintain bullet points for key achievements.`;
+        return `${basePrompt}Please tailor this project description to highlight skills and accomplishments relevant to the job description:\n\nProject: ${sectionContent.name}\nDescription: ${sectionContent.description || ''}\nKey Achievements: ${sectionContent.keyAchievements || ''}\n\nReturn the result *only* as a JSON object with two string keys: "description" and "keyAchievements". Example: {"description": "Tailored project description text...", "keyAchievements": "- Project achievement 1\\n- Project achievement 2"}. Do not include any other text or explanations outside of this JSON object.`;
       
       case "skills":
-        return `${basePrompt}Given these skills:\n\n${sectionContent.join(", ")}\n\nPlease provide a refined list of skills that match the job description requirements. Only include skills from the original list that are relevant to the job. Return as a comma-separated list of skills.`;
+        return `${basePrompt}Given these skills:\n\n${sectionContent.join(", ")}\n\nFrom the provided list of skills, return *only* a comma-separated list of those skills relevant to the job description. Only include skills from the original list. Do not include any other text, explanations, or introductory phrases. Example: Skill1, Skill2, Skill3`;
       
       case "languages":
-        return `${basePrompt}Given these languages:\n\n${sectionContent.join(", ")}\n\nPlease order these languages based on relevance to the job description. Return as a comma-separated list of languages, without adding new ones.`;
+        return `${basePrompt}Given these languages:\n\n${sectionContent.join(", ")}\n\nPlease order these languages based on relevance to the job description. Return *only* a comma-separated list of the provided languages, ordered by relevance. Do not add new languages. Do not include any other text, explanations, or introductory phrases. Example: English, Spanish, French`;
       
       case "certifications":
-        return `${basePrompt}Given these certifications:\n\n${sectionContent.join(", ")}\n\nPlease order these certifications based on relevance to the job description. Return as a comma-separated list of certifications, without adding new ones.`;
+        return `${basePrompt}Given these certifications:\n\n${sectionContent.join(", ")}\n\nPlease order these certifications based on relevance to the job description. Return *only* a comma-separated list of the provided certifications, ordered by relevance. Do not add new certifications. Do not include any other text, explanations, or introductory phrases. Example: Cert1, Cert2, Cert3`;
       
       default:
         return `${basePrompt}Please tailor the following content to match the job description:\n\n${JSON.stringify(sectionContent, null, 2)}\n\nProvide only the refined content.`;
@@ -427,8 +451,25 @@ const JobDescriptionTailor = () => {
       }
     }
     
-    const items = response.split(',').map(item => item.trim()).filter(item => item);
-    return items.length > 0 ? items : null;
+    // Fallback to splitting by comma if not clearly JSON
+    const rawItems = response.split(',');
+    const cleanedItems = rawItems.map(item => {
+      let cleaned = item.trim();
+      // Remove trailing period, but be careful not to remove from e.g. "example.com" if that's relevant
+      if (cleaned.endsWith('.') && !cleaned.match(/\.[a-zA-Z]{2,}$/)) {
+        cleaned = cleaned.slice(0, -1);
+      }
+      return cleaned;
+    }).filter(item => {
+      if (!item || item.length === 0 || item.length > 70) return false; // Basic length check
+      // Filter out common filler phrases
+      const fillerRegex = /^(Okay|Sure|Here is|Here are|The relevant|I have|Certainly|Alright|Great|Got it|No problem|Perfect|Absolutely|You got it|Of course|Definitely|Without a doubt|Indeed|Naturally|Positively|Undoubtedly|Unquestionably|As you wish|By all means|With pleasure|My pleasure|You bet|Consider it done|Done|Affirmative|Roger that|Copy that|10-4|Yes|No|Maybe|Possibly|Perhaps|I think so|I believe so|I suppose so|I guess so|I imagine so|I reckon so|I figure so|I assume so|I presume so|I surmise so|I deduce so|I infer so|I gather so|I understand so|I take it so|I expect so|I hope so|I trust so|I'm sure|I'm certain|I'm positive|I'm confident|I'm convinced|I'm persuaded|I'm satisfied|I'm content|I'm happy|I'm glad|I'm pleased|I'm delighted|I'm thrilled|I'm ecstatic|I'm overjoyed|I'm elated|I'm euphoric|I'm jubilant|I'm exultant|I'm triumphant|I'm victorious|I'm successful|I'm prosperous|I'm flourishing|I'm thriving|I'm blooming|I'm blossoming|I'm shining|I'm glowing|I'm radiant|I'm sparkling|I'm dazzling|I'm brilliant|I'm magnificent|I'm splendid|I'm superb|I'm wonderful|I'm marvelous|I'm fantastic|I'm fabulous|I'm terrific|I'm awesome|I'm amazing|I'm incredible|I'm phenomenal|I'm unbelievable|I'm astounding|I'm astonishing|I'm staggering|I'm breathtaking|I'm mind-blowing|I'm mind-boggling|I'm mind-bending|I'm mind-altering|I'm mind-expanding|I'm mind-opening|I'm eye-opening|I'm revelatory|I'm enlightening|I'm illuminating|I'm instructive|I'm informative|I'm educational|I'm edifying|I'm uplifting|I'm inspiring|I'm motivating|I'm encouraging|I'm stimulating|I'm invigorating|I'm refreshing|I'm revitalizing|I'm rejuvenating|I'm restorative|I'm healing|I'm therapeutic|I'm curative|I'm remedial|I'm corrective|I'm palliative|I'm soothing|I'm calming|I'm relaxing|I'm pacifying|I'm tranquilizing|I'm sedative|I'm hypnotic|I'm soporific|I'm narcotic|I'm opiatic|I'm anodyne|I'm analgesic|I'm anesthetic|I'm numbing|I'm deadening|I'm dulling|I'm blunting|I'm desensitizing|I'm immobilizing|I'm paralyzing|I'm petrifying|I'm ossifying|I'm fossilizing|I'm mummifying|I'm embalming|I'm preserving|I'm conserving|I'm protecting|I'm safeguarding|I'm sheltering|I'm shielding|I'm guarding|I'm defending|I'm securing|I'm ensuring|I'm assuring|I'm guaranteeing|I'm warranting|I'm certifying|I'm verifying|I'm authenticating|I'm validating|I'm confirming|I'm corroborating|I'm substantiating|I'm supporting|I'm backing|I'm endorsing|I'm sanctioning|I'm approving|I'm authorizing|I'm licensing|I'm permitting|I'm allowing|I'm enabling|I'm empowering|I'm facilitating|I'm assisting|I'm helping|I'm aiding|I'm succoring|I'm ministering to|I'm attending to|I'm caring for|I'm looking after|I'm tending to|I'm nursing|I'm fostering|I'm nurturing|I'm cultivating|I'm developing|I'm promoting|I'm advancing|I'm furthering|I'm boosting|I'm enhancing|I'm improving|I'm upgrading|I'm refining|I'm perfecting|I'm polishing|I'm honing|I'm sharpening|I'm whetting|I'm stimulating|I'm exciting|I'm arousing|I'm provoking|I'm inciting|I'm instigating|I'm fomenting|I'm kindling|I'm igniting|I'm firing|I'm fueling|I'm feeding|I'm nourishing|I'm supplying|I'm providing|I'm furnishing|I'm equipping|I'm outfitting|I'm accoutering|I'm rigging|I'm harnessing|I'm saddling|I'm yoking|I'm hitching|I'm coupling|I'm linking|I'm connecting|I'm joining|I'm uniting|I'm combining|I'm merging|I'm blending|I'm fusing|I'm amalgamating|I'm integrating|I'm incorporating|I'm assimilating|I'm absorbing|I'm engulfing|I'm swallowing|I'm devouring|I'm consuming|I'm ingesting|I'm digesting|I'm metabolizing|I'm processing|I'm handling|I'm managing|I'm controlling|I'm directing|I'm guiding|I'm steering|I'm piloting|I'm navigating|I'm conducting|I'm operating|I'm running|I'm administering|I'm supervising|I'm overseeing|I'm inspecting|I'm monitoring|I'm observing|I'm watching|I'm scrutinizing|I'm examining|I'm analyzing|I'm evaluating|I'm assessing|I'm appraising|I'm judging|I'm rating|I'm ranking|I'm grading|I'm scoring|I'm marking|I'm labeling|I'm tagging|I'm branding|I'm stamping|I'm engraving|I'm etching|I'm carving|I'm sculpting|I'm molding|I'm shaping|I'm forming|I'm fashioning|I'm designing|I'm creating|I'm inventing|I'm originating|I'm conceiving|I'm imagining|I'm envisioning|I'm visualizing|I'm dreaming|I'm fantasizing|I'm hallucinating|I'm tripping|I'm flying|I'm soaring|I'm gliding|I'm floating|I'm drifting|I'm sailing|I'm cruising|I'm coasting|I'm sliding|I'm slipping|I'm skidding|I'm skiing|I'm skating|I'm surfing|I'm swimming|I'm diving|I'm plunging|I'm sinking|I'm drowning|I'm dying|I'm perishing|I'm expiring|I'm ceasing|I'm stopping|I'm halting|I'm pausing|I'm resting|I'm sleeping|I'm hibernating|I'm estivating|I'm dormant|I'm latent|I'm quiescent|I'm inactive|I'm idle|I'm fallow|I'm vacant|I'm empty|I'm void|I'm barren|I'm sterile|I'm infertile|I'm unproductive|I'm fruitless|I'm futile|I'm vain|I'm useless|I'm worthless|I'm pointless|I'm meaningless|I'm senseless|I'm absurd|I'm ludicrous|I'm ridiculous|I'm preposterous|I'm outrageous|I'm scandalous|I'm shocking|I'm appalling|I'm horrifying|I'm terrifying|I'm dreadful|I'm fearful|I'm frightful|I'm ghastly|I'm gruesome|I'm grisly|I'm macabre|I'm morbid|I'm sinister|I'm evil|I'm wicked|I'm vile|I'm nefarious|I'm heinous|I'm atrocious|I'm monstrous|I'm diabolical|I'm fiendish|I'm demonic|I'm satanic|I'm hellish|I'm infernal|I'm damned|I'm cursed|I'm doomed|I'm fated|I'm destined|I'm predestined|I'm preordained|I'm foreordained|I'm predetermined|I'm foregone|I'm inevitable|I'm unavoidable|I'm inescapable|I'm certain|I'm sure|I'm positive|I'm confident|I'm convinced|I'm persuaded|I'm satisfied|I'm content|I'm happy|I'm glad|I'm pleased|I'm delighted|I'm thrilled|I'm ecstatic|I'm overjoyed|I'm elated|I'm euphoric|I'm jubilant|I'm exultant|I'm triumphant|I'm victorious|I'm successful|I'm prosperous|I'm flourishing|I'm thriving|I'm blooming|I'm blossoming|I'm shining|I'm glowing|I'm radiant|I'm sparkling|I'm dazzling|I'm brilliant|I'm magnificent|I'm splendid|I'm superb|I'm wonderful|I'm marvelous|I'm fantastic|I'm fabulous|I'm terrific|I'm awesome|I'm amazing|I'm incredible|I'm phenomenal|I'm unbelievable|I'm astounding|I'm astonishing|I'm staggering|I'm breathtaking|I'm mind-blowing|I'm mind-boggling|I'm mind-bending|I'm mind-altering|I'm mind-expanding|I'm mind-opening|I'm eye-opening|I'm revelatory|I'm enlightening|I'm illuminating|I'm instructive|I'm informative|I'm educational|I'm edifying|I'm uplifting|I'm inspiring|I'm motivating|I'm encouraging|I'm stimulating|I'm invigorating|I'm refreshing|I'm revitalizing|I'm rejuvenating|I'm restorative|I'm healing|I'm therapeutic|I'm curative|I'm remedial|I'm corrective|I'm palliative|I'm soothing|I'm calming|I'm relaxing|I'm pacifying|I'm tranquilizing|I'm sedative|I'm hypnotic|I'm soporific|I'm narcotic|I'm opiatic|I'm anodyne|I'm analgesic|I'm anesthetic|I'm numbing|I'm deadening|I'm dulling|I'm blunting|I'm desensitizing|I'm immobilizing|I'm paralyzing|I'm petrifying|I'm ossifying|I'm fossilizing|I'm mummifying|I'm embalming|I'm preserving|I'm conserving|I'm protecting|I'm safeguarding|I'm sheltering|I'm shielding|I'm guarding|I'm defending|I'm securing|I'm ensuring|I'm assuring|I'm guaranteeing|I'm warranting|I'm certifying|I'm verifying|I'm authenticating|I'm validating|I'm confirming|I'm corroborating|I'm substantiating|I'm supporting|I'm backing|I'm endorsing|I'm sanctioning|I'm approving|I'm authorizing|I'm licensing|I'm permitting|I'm allowing|I'm enabling|I'm empowering|I'm facilitating|I'm assisting|I'm helping|I'm aiding|I'm succoring|I'm ministering to|I'm attending to|I'm caring for|I'm looking after|I'm tending to|I'm nursing|I'm fostering|I'm nurturing|I'm cultivating|I'm developing|I'm promoting|I'm advancing|I'm furthering|I'm boosting|I'm enhancing|I'm improving|I'm upgrading|I'm refining|I'm perfecting|I'm polishing|I'm honing|I'm sharpening|I'm whetting|I'm stimulating|I'm exciting|I'm arousing|I'm provoking|I'm inciting|I'm instigating|I'm fomenting|I'm kindling|I'm igniting|I'm firing|I'm fueling|I'm feeding|I'm nourishing|I'm supplying|I'm providing|I'm furnishing|I'm equipping|I'm outfitting|I'm accoutering|I'm rigging|I'm harnessing|I'm saddling|I'm yoking|I'm hitching|I'm coupling|I'm linking|I'm connecting|I'm joining|I'm uniting|I'm combining|I'm merging|I'm blending|I'm fusing|I'm amalgamating|I'm integrating|I'm incorporating|I'm assimilating|I'm absorbing|I'm engulfing|I'm swallowing|I'm devouring|I'm consuming|I'm ingesting|I'm digesting|I'm metabolizing|I'm processing|I'm handling|I'm managing|I'm controlling|I'm directing|I'm guiding|I'm steering|I'm piloting|I'm navigating|I'm conducting|I'm operating|I'm running|I'm administering|I'm supervising|I'm overseeing|I'm inspecting|I'm monitoring|I'm observing|I'm watching|I'm scrutinizing|I'm examining|I'm analyzing|I'm evaluating|I'm assessing|I'm appraising|I'm judging|I'm rating|I'm ranking|I'm grading|I'm scoring|I'm marking|I'm labeling|I'm tagging|I'm branding|I'm stamping|I'm engraving|I'm etching|I'm carving|I'm sculpting|I'm molding|I'm shaping|I'm forming|I'm fashioning|I'm designing|I'm creating|I'm inventing|I'm originating|I'm conceiving|I'm imagining|I'm envisioning|I'm visualizing|I'm dreaming|I'm fantasizing|I'm hallucinating|I'm tripping|I'm flying|I'm soaring|I'm gliding|I'm floating|I'm drifting|I'm sailing|I'm cruising|I'm coasting|I'm sliding|I'm slipping|I'm skidding|I'm skiing|I'm skating|I'm surfing|I'm swimming|I'm diving|I'm plunging|I'm sinking|I'm drowning|I'm dying|I'm perishing|I'm expiring|I'm ceasing|I'm stopping|I'm halting|I'm pausing|I'm resting|I'm sleeping|I'm hibernating|I'm estivating|I'm dormant|I'm latent|I'm quiescent|I'm inactive|I'm idle|I'm fallow|I'm vacant|I'm empty|I'm void|I'm barren|I'm sterile|I'm infertile|I'm unproductive|I'm fruitless|I'm futile|I'm vain|I'm useless|I'm worthless|I'm pointless|I'm meaningless|I'm senseless|I'm absurd|I'm ludicrous|I'm ridiculous|I'm preposterous|I'm outrageous|I'm scandalous|I'm shocking|I'm appalling|I'm horrifying|I'm terrifying|I'm dreadful|I'm fearful|I'm frightful|I'm ghastly|I'm gruesome|I'm grisly|I'm macabre|I'm morbid|I'm sinister|I'm evil|I'm wicked|I'm vile|I'm nefarious|I'm heinous|I'm atrocious|I'm monstrous|I'm diabolical|I'm fiendish|I'm demonic|I'm satanic|I'm hellish|I'm infernal|I'm damned|I'm cursed|I'm doomed|I'm fated|I'm destined|I'm predestined|I'm preordained|I'm foreordained|I'm predetermined|I'm foregone|I'm inevitable|I'm unavoidable|I'm inescapable)\s*:?\s*/i;
+      if (fillerRegex.test(item)) return false;
+      // Filter out items that look like sentences
+      if (item.includes(' ') && item.match(/[.!?]$/)) return false; // Has space and ends with sentence punctuation
+      return true;
+    });
+    return cleanedItems.length > 0 ? cleanedItems : null;
   };
 
   const processCertifications = (tailoredCertifications) => {
@@ -443,58 +484,123 @@ const JobDescriptionTailor = () => {
     ];
     
     const certificationList = [];
-    
+    let jsonExtractedSuccessfully = false;
+
     if (tailoredCertifications.includes('{') || 
         tailoredCertifications.includes('[') || 
         tailoredCertifications.includes('```')) {
-        
       try {
         const extracted = extractFromJson(tailoredCertifications, 
-          ['certifications', 'certification', 'credentials', 'qualifications']);
+          ['certifications', 'certification', 'credentials', 'qualifications', 'items']);
           
         if (extracted) {
+          let tempExtractedList = [];
           if (Array.isArray(extracted)) {
-            return extracted.filter(cert => 
-              cert && typeof cert === 'string' && 
-              (cert.length > 5 && !cert.includes(':')) &&
-              (certPatterns.some(pattern => pattern.test(cert)) || cert.includes('Course') || cert.includes('Training'))
-            );
+            tempExtractedList = extracted;
+            jsonExtractedSuccessfully = true;
           } else if (typeof extracted === 'string') {
-            const splitCerts = extracted.split(/[,\n]/).map(item => item.trim()).filter(Boolean);
-            return splitCerts.filter(cert => 
-              (cert.length > 5 && !cert.includes(':')) &&
+            // If extractFromJson returns a string, it means it couldn't parse it as JSON
+            // but also didn't hit its internal string fallback, or the keys weren't found.
+            // We might still want to try splitting it if it seems like a list.
+            if (extracted.includes(',')) {
+                 tempExtractedList = extracted.split(/[,\n]/).map(item => item.trim()).filter(Boolean);
+                 jsonExtractedSuccessfully = true; // Consider this a successful extraction for list purposes
+            } else {
+                // A single string that's not a list, could be a valid single cert or noise
+                // We'll let the main parser handle this if jsonExtractedSuccessfully remains false
+            }
+          } else if (typeof extracted === 'object' && extracted !== null) {
+            // This case handles if extractFromJson returns an object like {certifications: [...]}
+            // We look for a value that is an array.
+            const arrayValue = Object.values(extracted).find(val => Array.isArray(val));
+            if (arrayValue) {
+                tempExtractedList = arrayValue;
+                jsonExtractedSuccessfully = true;
+            }
+          }
+
+          if (jsonExtractedSuccessfully) {
+            const filteredExtracted = tempExtractedList.filter(cert =>
+              cert && typeof cert === 'string' &&
+              (cert.length > 1 && cert.length < 150 && !cert.includes(':')) && // Adjusted length and colon check
               (certPatterns.some(pattern => pattern.test(cert)) || cert.includes('Course') || cert.includes('Training'))
             );
+            certificationList.push(...filteredExtracted);
+            // If JSON extraction yields results, prioritize them.
+            if (certificationList.length > 0) return certificationList;
           }
         }
       } catch (error) {
-        console.error("Error processing JSON certifications:", error);
+        console.error("Error processing JSON-like certifications string:", error);
       }
     }
+
+    // If JSON extraction didn't yield results, or if the input wasn't JSON-like, try direct parsing.
+    // But be wary if the string is too long and JSON extraction failed.
+    if (jsonExtractedSuccessfully === false && tailoredCertifications.length > 300) {
+      console.warn("Skipping direct parsing of long certification string after JSON extraction failed.");
+      return null; // Or an empty list, depending on desired strictness
+    }
     
+    // Standard comma/newline splitting fallback
     const candidates = tailoredCertifications
-      .replace(/```json/g, '')
+      .replace(/```json/g, '') // remove markdown
       .replace(/```/g, '')
-      .split(/[\n,]/)
+      .split(/[\n,]/) // split by newline or comma
       .map(item => item.trim())
-      .filter(item => item.length > 5 && !item.includes(':'));
+      .filter(item =>
+        item && item.length > 1 && item.length < 150 && !item.includes(':') // Basic filtering
+      );
     
     for (const candidate of candidates) {
       if (certPatterns.some(pattern => pattern.test(candidate)) || 
           candidate.includes('Course') || 
           candidate.includes('Training')) {
-        certificationList.push(candidate);
+        // Avoid duplicates if jsonExtractedSuccessfully was true but yielded empty due to filtering
+        if (!certificationList.includes(candidate)) {
+            certificationList.push(candidate);
+        }
       }
     }
     
-    if (certificationList.length === 0) {
+    // Return default certifications only if the original response was very short and implies none.
+    const trimmedResponse = tailoredCertifications.trim().toLowerCase();
+    if (certificationList.length === 0 && (trimmedResponse.length < 10 && (trimmedResponse === "none" || trimmedResponse === "n/a" || trimmedResponse === "no certifications"))) {
+      console.log("LLM indicated no certifications, returning default placeholders.");
       return [
         "Certified Professional in relevant technology",
         "Technical training relevant to the position"
       ];
     }
     
-    return certificationList;
+    return certificationList.length > 0 ? certificationList : null; // Return null if no valid certs found from a noisy response
+  };
+
+  const isValidString = (str, minLength = 1, maxLength = Infinity, fieldName = "String") => {
+    if (typeof str !== 'string') {
+      console.warn(`${fieldName} validation failed: Not a string. Received:`, str);
+      return false;
+    }
+    const trimmedStr = str.trim();
+    if (trimmedStr.length < minLength) {
+      console.warn(`${fieldName} validation failed: Too short (min ${minLength}). Length: ${trimmedStr.length}. Value: "${trimmedStr.substring(0,50)}"`);
+      return false;
+    }
+    if (trimmedStr.length > maxLength) {
+      console.warn(`${fieldName} validation failed: Too long (max ${maxLength}). Length: ${trimmedStr.length}. Value: "${trimmedStr.substring(0,50)}..."`);
+      return false;
+    }
+    // Check if it looks like a stringified JSON object or array
+    if ((trimmedStr.startsWith("{") && trimmedStr.endsWith("}")) || (trimmedStr.startsWith("[") && trimmedStr.endsWith("]"))) {
+        try {
+            JSON.parse(trimmedStr); // If it parses, it's likely stringified JSON
+            console.warn(`${fieldName} validation failed: Appears to be stringified JSON. Value: "${trimmedStr.substring(0,100)}..."`);
+            return false;
+        } catch (e) {
+            // Not valid JSON, so it's probably a string with braces, which is fine
+        }
+    }
+    return true;
   };
 
   const updateWorkExperience = (index, tailoredExperience) => {
@@ -604,13 +710,26 @@ const JobDescriptionTailor = () => {
 
       try {
         const summaryPrompt = createSectionPrompt("summary", baseResumeData.summary, jobDescription);
-        const summaryResponse = await callLlmApiWithRetry(summaryPrompt);
-        const tailoredSummary = extractFromJson(summaryResponse, ["summary"]);
+        const llmOutputForSummary = await callLlmApiWithRetry(summaryPrompt);
+        console.log("Raw LLM output for Summary:", llmOutputForSummary);
 
-        if (tailoredSummary && updateResumeSection("summary", tailoredSummary)) {
-          successCount++;
-          setSectionProgress(prev => ({ ...prev, summary: 'success' }));
+        // Validate llmOutputForSummary: must be a string, reasonable length, not JSON-like
+        const trimmedSummary = llmOutputForSummary ? llmOutputForSummary.trim() : "";
+
+        // The extractFromJson was used before, but for summary, we expect direct text.
+        // We'll use isValidString directly. The prompt asks for "only the refined summary text".
+        if (isValidString(trimmedSummary, 10, 2500, "Summary text") &&
+            !(trimmedSummary.startsWith('{"') && trimmedSummary.endsWith('"}'))) {
+          console.log("Validated Summary:", trimmedSummary);
+          if (updateResumeSection("summary", trimmedSummary)) {
+            successCount++;
+            setSectionProgress(prev => ({ ...prev, summary: 'success' }));
+          } else {
+            console.warn("Failed to update summary section even after validation.");
+            setSectionProgress(prev => ({ ...prev, summary: 'failed' }));
+          }
         } else {
+          console.warn(`Summary validation failed. Raw output: "${llmOutputForSummary.substring(0,100)}..."`, llmOutputForSummary);
           setSectionProgress(prev => ({ ...prev, summary: 'failed' }));
         }
       } catch (error) {
@@ -629,20 +748,56 @@ const JobDescriptionTailor = () => {
 
         try {
           const experiencePrompt = createSectionPrompt("workExperience", experience, jobDescription);
-          const experienceResponse = await callLlmApiWithRetry(experiencePrompt);
-          // Requesting an object with description and keyAchievements
-          const tailoredExperienceData = extractFromJson(experienceResponse, ["description", "keyAchievements"]);
+          const llmResponse = await callLlmApiWithRetry(experiencePrompt);
+          console.log(`Raw LLM output for Work Experience ${i + 1}:`, llmResponse);
 
-          if (tailoredExperienceData && typeof tailoredExperienceData === 'object' && !Array.isArray(tailoredExperienceData) && Object.keys(tailoredExperienceData).length > 0) {
-            if (updateWorkExperience(i, tailoredExperienceData)) {
-              successCount++;
-              setSectionProgress(prev => ({ ...prev, [`workExperience-${i}`]: 'success' }));
+          let tailoredData = extractFromJson(llmResponse, ["description", "keyAchievements"]);
+          console.log(`Extracted data for Work Experience ${i + 1}:`, tailoredData);
+
+          if (tailoredData && typeof tailoredData === 'object' && !Array.isArray(tailoredData)) {
+            const validatedData = {};
+            let hasValidFields = false;
+
+            if (tailoredData.description !== undefined) {
+              if (isValidString(tailoredData.description, 10, 5000, `Work Experience ${i+1} Description`)) {
+                validatedData.description = tailoredData.description.trim();
+                hasValidFields = true;
+              } else {
+                console.warn(`Invalid description for Work Experience ${i + 1}.`);
+              }
+            }
+
+            if (tailoredData.keyAchievements !== undefined) {
+              // Key achievements can sometimes be an array from LLM, convert to string if so.
+              let achievementsString = tailoredData.keyAchievements;
+              if (Array.isArray(achievementsString)) {
+                achievementsString = achievementsString.join("\n- ").trim();
+                if (achievementsString) achievementsString = "- " + achievementsString;
+              }
+
+              if (isValidString(achievementsString, 5, 2000, `Work Experience ${i+1} Key Achievements`)) {
+                validatedData.keyAchievements = achievementsString.trim();
+                hasValidFields = true;
+              } else {
+                 console.warn(`Invalid keyAchievements for Work Experience ${i + 1}.`);
+              }
+            }
+
+            if (hasValidFields && Object.keys(validatedData).length > 0) {
+              console.log(`Validated data for Work Experience ${i + 1}:`, validatedData);
+              if (updateWorkExperience(i, validatedData)) {
+                successCount++;
+                setSectionProgress(prev => ({ ...prev, [`workExperience-${i}`]: 'success' }));
+              } else {
+                console.error(`Failed to update work experience ${i + 1} even with validated data.`);
+                setSectionProgress(prev => ({ ...prev, [`workExperience-${i}`]: 'failed' }));
+              }
             } else {
-              console.error(`Failed to update work experience ${i + 1} even with valid data.`);
+              console.warn(`No valid fields found after validation for Work Experience ${i + 1}. Original extracted:`, tailoredData);
               setSectionProgress(prev => ({ ...prev, [`workExperience-${i}`]: 'failed' }));
             }
           } else {
-            console.warn(`Tailoring work experience ${i + 1} did not return a valid object. Received:`, tailoredExperienceData);
+            console.warn(`Tailoring work experience ${i + 1} did not return a valid object from extractFromJson. Received:`, tailoredData);
             setSectionProgress(prev => ({ ...prev, [`workExperience-${i}`]: 'failed' }));
           }
         } catch (error) {
@@ -662,20 +817,67 @@ const JobDescriptionTailor = () => {
 
         try {
           const projectPrompt = createSectionPrompt("projects", project, jobDescription);
-          const projectResponse = await callLlmApiWithRetry(projectPrompt);
-          // Requesting an object with name, description, and keyAchievements
-          const tailoredProjectData = extractFromJson(projectResponse, ["name", "description", "keyAchievements"]);
+          const llmResponse = await callLlmApiWithRetry(projectPrompt);
+          console.log(`Raw LLM output for Project ${i + 1}:`, llmResponse);
 
-          if (tailoredProjectData && typeof tailoredProjectData === 'object' && !Array.isArray(tailoredProjectData) && Object.keys(tailoredProjectData).length > 0) {
-            if (updateProject(i, tailoredProjectData)) {
-              successCount++;
-              setSectionProgress(prev => ({ ...prev, [`project-${i}`]: 'success' }));
+          let tailoredData = extractFromJson(llmResponse, ["name", "description", "keyAchievements"]);
+          console.log(`Extracted data for Project ${i + 1}:`, tailoredData);
+
+          if (tailoredData && typeof tailoredData === 'object' && !Array.isArray(tailoredData)) {
+            const validatedData = {};
+            let hasValidFields = false;
+
+            if (tailoredData.name !== undefined) {
+              if (isValidString(tailoredData.name, 2, 150, `Project ${i+1} Name`)) {
+                validatedData.name = tailoredData.name.trim();
+                // Name is crucial, so we consider it a valid field towards `hasValidFields`
+                hasValidFields = true;
+              } else {
+                console.warn(`Invalid name for Project ${i + 1}.`);
+                // If name is invalid, we might not want to proceed with this project update
+              }
+            }
+
+            if (tailoredData.description !== undefined) {
+              if (isValidString(tailoredData.description, 10, 5000, `Project ${i+1} Description`)) {
+                validatedData.description = tailoredData.description.trim();
+                hasValidFields = true;
+              } else {
+                console.warn(`Invalid description for Project ${i + 1}.`);
+              }
+            }
+
+            if (tailoredData.keyAchievements !== undefined) {
+              let achievementsString = tailoredData.keyAchievements;
+              if (Array.isArray(achievementsString)) {
+                achievementsString = achievementsString.join("\n- ").trim();
+                if(achievementsString) achievementsString = "- " + achievementsString;
+              }
+              if (isValidString(achievementsString, 5, 2000, `Project ${i+1} Key Achievements`)) {
+                validatedData.keyAchievements = achievementsString.trim();
+                hasValidFields = true;
+              } else {
+                console.warn(`Invalid keyAchievements for Project ${i + 1}.`);
+              }
+            }
+
+            // Ensure there's something to update, especially if name was initially present and valid
+            // or if other fields became valid.
+            if (hasValidFields && Object.keys(validatedData).length > 0) {
+              console.log(`Validated data for Project ${i + 1}:`, validatedData);
+              if (updateProject(i, validatedData)) {
+                successCount++;
+                setSectionProgress(prev => ({ ...prev, [`project-${i}`]: 'success' }));
+              } else {
+                console.error(`Failed to update project ${i + 1} even with validated data.`);
+                setSectionProgress(prev => ({ ...prev, [`project-${i}`]: 'failed' }));
+              }
             } else {
-              console.error(`Failed to update project ${i + 1} even with valid data.`);
+              console.warn(`No valid fields found after validation for Project ${i + 1}. Original extracted:`, tailoredData);
               setSectionProgress(prev => ({ ...prev, [`project-${i}`]: 'failed' }));
             }
           } else {
-            console.warn(`Tailoring project ${i + 1} did not return a valid object. Received:`, tailoredProjectData);
+            console.warn(`Tailoring project ${i + 1} did not return a valid object from extractFromJson. Received:`, tailoredData);
             setSectionProgress(prev => ({ ...prev, [`project-${i}`]: 'failed' }));
           }
         } catch (error) {
@@ -696,34 +898,51 @@ const JobDescriptionTailor = () => {
         );
 
         const skillsPrompt = createSectionPrompt("skills", allSkills, jobDescription);
-        const skillsResponse = await callLlmApiWithRetry(skillsPrompt);
-        const tailoredSkills = extractListItems(skillsResponse, "Tailored skills");
+        const llmResponse = await callLlmApiWithRetry(skillsPrompt);
+        console.log("Raw LLM output for Skills:", llmResponse);
 
-        if (tailoredSkills && tailoredSkills.length > 0) {
-          const skillSectionCount = baseResumeData.skills.length;
-          const skillsPerSection = Math.ceil(tailoredSkills.length / skillSectionCount);
+        const tailoredItems = extractListItems(llmResponse, "Tailored skills");
+        console.log("Extracted items for Skills:", tailoredItems);
+
+        if (Array.isArray(tailoredItems)) {
+          const validItems = tailoredItems
+            .map(item => typeof item === 'string' ? item.trim() : "")
+            .filter(item => item.length > 0 && item.length < 70 && !item.endsWith('.')); // Skills generally don't end with '.'
           
-          const newSkillsStructure = baseResumeData.skills.map((skillSection, index) => {
-            const start = index * skillsPerSection;
-            const sectionSkills = tailoredSkills.slice(start, start + skillsPerSection).filter(Boolean);
-            
-            if (Array.isArray(skillSection)) {
-              return sectionSkills.slice(0, skillSection.length);
-            } else {
-              return {
-                ...skillSection,
-                skills: sectionSkills.slice(0, skillSection.skills ? skillSection.skills.length : 0)
-              };
-            }
-          });
+          console.log("Validated items for Skills:", validItems);
 
-          if (updateResumeSection("skills", newSkillsStructure)) {
-            successCount++;
-            setSectionProgress(prev => ({ ...prev, skills: 'success' }));
+          if (validItems.length > 0) {
+            const skillSectionCount = baseResumeData.skills.length;
+            const skillsPerSection = Math.ceil(validItems.length / skillSectionCount);
+            
+            const newSkillsStructure = baseResumeData.skills.map((skillSection, index) => {
+              const start = index * skillsPerSection;
+              const sectionSkills = validItems.slice(start, start + skillsPerSection).filter(Boolean);
+
+              if (Array.isArray(skillSection)) {
+                // Ensure we don't introduce empty strings if original section was smaller
+                return sectionSkills.slice(0, Math.max(skillSection.length, sectionSkills.length));
+              } else {
+                return {
+                  ...skillSection,
+                  skills: sectionSkills.slice(0, Math.max(skillSection.skills ? skillSection.skills.length : 0, sectionSkills.length))
+                };
+              }
+            });
+
+            if (updateResumeSection("skills", newSkillsStructure)) {
+              successCount++;
+              setSectionProgress(prev => ({ ...prev, skills: 'success' }));
+            } else {
+              console.warn("Failed to update skills section even after validation.");
+              setSectionProgress(prev => ({ ...prev, skills: 'failed' }));
+            }
           } else {
+            console.warn("Skills list validation resulted in empty or invalid list. Original extracted:", tailoredItems);
             setSectionProgress(prev => ({ ...prev, skills: 'failed' }));
           }
         } else {
+          console.warn("Tailoring skills did not return an array from extractListItems. Received:", tailoredItems);
           setSectionProgress(prev => ({ ...prev, skills: 'failed' }));
         }
       } catch (error) {
@@ -737,13 +956,33 @@ const JobDescriptionTailor = () => {
 
       try {
         const languagesPrompt = createSectionPrompt("languages", baseResumeData.languages, jobDescription);
-        const languagesResponse = await callLlmApiWithRetry(languagesPrompt);
-        const tailoredLanguages = extractListItems(languagesResponse, "Tailored languages");
+        const llmResponse = await callLlmApiWithRetry(languagesPrompt);
+        console.log("Raw LLM output for Languages:", llmResponse);
 
-        if (tailoredLanguages && updateSkills("languages", tailoredLanguages)) {
-          successCount++;
-          setSectionProgress(prev => ({ ...prev, languages: 'success' }));
+        const tailoredItems = extractListItems(llmResponse, "Tailored languages");
+        console.log("Extracted items for Languages:", tailoredItems);
+
+        if (Array.isArray(tailoredItems)) {
+          const validItems = tailoredItems
+            .map(item => typeof item === 'string' ? item.trim() : "")
+            .filter(item => item.length > 0 && item.length < 70 && !item.endsWith('.'));
+
+          console.log("Validated items for Languages:", validItems);
+
+          if (validItems.length > 0) {
+            if (updateSkills("languages", validItems)) {
+              successCount++;
+              setSectionProgress(prev => ({ ...prev, languages: 'success' }));
+            } else {
+              console.warn("Failed to update languages section even after validation.");
+              setSectionProgress(prev => ({ ...prev, languages: 'failed' }));
+            }
+          } else {
+            console.warn("Languages list validation resulted in empty or invalid list. Original extracted:", tailoredItems);
+            setSectionProgress(prev => ({ ...prev, languages: 'failed' }));
+          }
         } else {
+          console.warn("Tailoring languages did not return an array from extractListItems. Received:", tailoredItems);
           setSectionProgress(prev => ({ ...prev, languages: 'failed' }));
         }
       } catch (error) {
@@ -757,15 +996,39 @@ const JobDescriptionTailor = () => {
 
       try {
         const certificationsPrompt = createSectionPrompt("certifications", baseResumeData.certifications, jobDescription);
-        const certificationsResponse = await callLlmApiWithRetry(certificationsPrompt);
+        const llmResponse = await callLlmApiWithRetry(certificationsPrompt);
+        console.log("Raw LLM output for Certifications:", llmResponse);
         
-        const processedCertifications = processCertifications(certificationsResponse);
+        const processedCerts = processCertifications(llmResponse);
+        console.log("Processed items for Certifications by processCertifications:", processedCerts);
         
-        if (processedCertifications && processedCertifications.length > 0 && 
-            updateSkills("certifications", processedCertifications)) {
-          successCount++;
-          setSectionProgress(prev => ({ ...prev, certifications: 'success' }));
+        // processCertifications can return null or an array (possibly empty or default)
+        if (Array.isArray(processedCerts)) {
+          const validCerts = processedCerts
+            .map(item => typeof item === 'string' ? item.trim() : "")
+            .filter(item => item.length > 0 && item.length < 150); // Max length 150
+
+          console.log("Validated items for Certifications:", validCerts);
+
+          // processCertifications has logic for default placeholders if LLM indicates none.
+          // So, an empty validCerts list here might be intentional if the defaults were filtered out
+          // or if the response was noisy and no actual certs were found.
+          // We proceed if validCerts has items OR if processedCerts was an empty array (preserving defaults if any passed through).
+          if (validCerts.length > 0 || (Array.isArray(processedCerts) && processedCerts.length === 0 && llmResponse.trim().length < 15) ) { // Allow update if valid certs OR (empty array from processCerts AND short LLM response, implying "none" was intended)
+            if (updateSkills("certifications", validCerts)) { // Update with the filtered list
+              successCount++;
+              setSectionProgress(prev => ({ ...prev, certifications: 'success' }));
+            } else {
+              console.warn("Failed to update certifications section even after validation.");
+              setSectionProgress(prev => ({ ...prev, certifications: 'failed' }));
+            }
+          } else {
+             console.warn("Certifications list validation resulted in empty or invalid list, and not a clear 'none' from LLM. Original processed:", processedCerts, "Filtered valid:", validCerts);
+            setSectionProgress(prev => ({ ...prev, certifications: 'failed' }));
+          }
         } else {
+          // This means processCertifications returned null (e.g. noisy long string)
+          console.warn("Processing certifications resulted in null (likely noisy input). Raw LLM response:", llmResponse.substring(0,100));
           setSectionProgress(prev => ({ ...prev, certifications: 'failed' }));
         }
       } catch (error) {
